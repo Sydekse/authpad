@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+beblocky-auth-service
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+/vendor/
+*.test
+coverage.out
+
+# OS
+.DS_Store
+Thumbs.db
+.git.backup
