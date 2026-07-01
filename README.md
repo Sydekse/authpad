@@ -1,4 +1,4 @@
-# goauth
+# authpad
 
 Embeddable Go authentication library with optional internal IdP (profiles, roles, groups). Inspired by [better-auth](https://www.better-auth.com/) — configure schema, roles, and hosted pages; mount on your existing chi router.
 
