@@ -20,6 +20,7 @@ func LoadFromEnv() Config {
 	cfg.Session.TTL = getEnvDuration("SESSION_TTL", 7*24*time.Hour)
 	cfg.Session.IdleTimeout = getEnvDuration("SESSION_IDLE_TIMEOUT", 24*time.Hour)
 	cfg.Session.MaxLifetime = getEnvDuration("SESSION_MAX_LIFETIME", 30*24*time.Hour)
+	cfg.Session.RememberMeTTL = getEnvDuration("SESSION_REMEMBER_TTL", 30*24*time.Hour)
 
 	cfg.Security.PepperKey = os.Getenv("PEPPER_KEY")
 	cfg.Security.SessionSecret = os.Getenv("SESSION_SECRET")

@@ -45,9 +45,11 @@ Device management:
 
 ## MFA
 
+- List factors: `GET /api/v1/auth/mfa`
 - TOTP: `POST /api/v1/auth/mfa/enroll`, `POST /api/v1/auth/mfa/verify`
 - WebAuthn (simplified): register begin/finish endpoints
 - Recovery codes generated on TOTP enroll
+- Remove factor: `DELETE /api/v1/auth/mfa/{id}`
 
 ## GDPR
 

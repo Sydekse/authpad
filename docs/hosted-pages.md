@@ -1,6 +1,6 @@
 # Hosted Pages
 
-goauth does not render UI. Developers host signin, signup, and related pages and configure redirect URLs.
+authpad does not render UI. Developers host signin, signup, and related pages and configure redirect URLs.
 
 ## Pages configuration
 

@@ -7,11 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/domain/auth"
-	auth_repo "github.com/auth-project/goauth/internal/repository/auth"
-	"github.com/auth-project/goauth/internal/security"
+	"github.com/auth-project/authpad/internal/domain/auth"
+	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
+	"github.com/auth-project/authpad/internal/security"
 	"github.com/google/uuid"
 	"github.com/pquerna/otp/totp"
 )
@@ -24,10 +25,14 @@ type MFAService struct {
 	authSvc    *AuthService
 	auditSvc   *AuditService
 	secret     string
+	issuer     string
 }
 
-func NewMFAService(factorRepo *auth_repo.FactorRepo, authSvc *AuthService, auditSvc *AuditService, sessionSecret string) *MFAService {
-	return &MFAService{factorRepo: factorRepo, authSvc: authSvc, auditSvc: auditSvc, secret: sessionSecret}
+func NewMFAService(factorRepo *auth_repo.FactorRepo, authSvc *AuthService, auditSvc *AuditService, sessionSecret, issuer string) *MFAService {
+	if strings.TrimSpace(issuer) == "" {
+		issuer = "Sydek Auth"
+	}
+	return &MFAService{factorRepo: factorRepo, authSvc: authSvc, auditSvc: auditSvc, secret: sessionSecret, issuer: issuer}
 }
 
 type TOTPEnrollResult struct {
@@ -37,9 +42,13 @@ type TOTPEnrollResult struct {
 }
 
 func (s *MFAService) EnrollTOTP(ctx context.Context, userID uuid.UUID, label string) (*TOTPEnrollResult, error) {
+	accountName := strings.TrimSpace(label)
+	if accountName == "" {
+		accountName = "account"
+	}
 	key, err := totp.Generate(totp.GenerateOpts{
-		Issuer:      "goauth",
-		AccountName: label,
+		Issuer:      s.issuer,
+		AccountName: accountName,
 	})
 	if err != nil {
 		return nil, err

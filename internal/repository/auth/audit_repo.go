@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/auth-project/goauth/internal/database"
+	"github.com/auth-project/authpad/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -44,18 +44,19 @@ func (r *AuditRepo) ListByUserID(ctx context.Context, userID uuid.UUID, limit in
 	defer rows.Close()
 	var out []map[string]any
 	for rows.Next() {
-		var action, ip, ua string
+		var action string
+		var ip, ua *string
 		var details []byte
 		var createdAt time.Time
 		if err := rows.Scan(&action, &ip, &ua, &details, &createdAt); err != nil {
 			return nil, err
 		}
 		entry := map[string]any{"action": action, "created_at": createdAt, "source": "auth"}
-		if ip != "" {
-			entry["ip_address"] = ip
+		if ip != nil && *ip != "" {
+			entry["ip_address"] = *ip
 		}
-		if ua != "" {
-			entry["user_agent"] = ua
+		if ua != nil && *ua != "" {
+			entry["user_agent"] = *ua
 		}
 		if len(details) > 0 {
 			var d map[string]any

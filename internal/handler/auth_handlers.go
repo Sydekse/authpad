@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/service"
-	"github.com/auth-project/goauth/pkg/apierror"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/auth-project/authpad/internal/service"
+	"github.com/auth-project/authpad/pkg/apierror"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,8 +30,9 @@ type signupRequest struct {
 }
 
 type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	RememberMe bool   `json:"remember_me"`
 }
 
 type passwordResetRequestBody struct {
@@ -81,6 +83,16 @@ func (h *AuthHandlers) Signup(w http.ResponseWriter, r *http.Request) {
 		if token, err := h.Auth.CreateEmailVerificationToken(r.Context(), result.UserID); err == nil && h.Email != nil {
 			_ = h.Email.SendEmailVerification(result.Email, h.Email.BuildVerifyURL(token))
 		}
+		// Do not log the user in until email is verified.
+		if result.SessionID != uuid.Nil {
+			_ = h.Auth.RevokeSession(r.Context(), result.SessionID)
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"ok":                    true,
+			"email":                 result.Email,
+			"requires_verification": true,
+		})
+		return
 	}
 
 	setSessionCookie(w, result.Token, h.Cfg)
@@ -110,20 +122,27 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	ip := parseIPFromRemote(r)
 	ua := r.Header.Get("User-Agent")
-	token, sess, err := h.Auth.CreateSession(r.Context(), user.ID, ip, ua)
+	ttl := h.Cfg.Session.TTL
+	if req.RememberMe {
+		ttl = h.Cfg.Session.RememberMeTTL
+		if ttl <= 0 {
+			ttl = 30 * 24 * time.Hour
+		}
+	}
+	token, sess, err := h.Auth.CreateSessionWithTTL(r.Context(), user.ID, ip, ua, ttl)
 	if err != nil {
 		apierror.Internal(w, "LOGIN_FAILED", "Could not create session")
 		return
 	}
 
 	if h.Audit != nil {
-		h.Audit.LogAuth(r.Context(), &user.ID, "login.success", ip, ua, nil)
+		h.Audit.LogAuth(r.Context(), &user.ID, "login.success", ip, ua, map[string]any{"remember_me": req.RememberMe})
 	}
 	if h.Cfg.Hooks.OnLogin != nil {
 		_ = h.Cfg.Hooks.OnLogin(r.Context(), user.ID)
 	}
 
-	setSessionCookie(w, token, h.Cfg)
+	setSessionCookie(w, token, h.Cfg, ttl)
 	name := user.Email
 	if h.IdP != nil {
 		if profile, _ := h.IdP.GetProfile(r.Context(), user.ID); profile != nil {
@@ -200,11 +219,34 @@ func (h *AuthHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		apierror.BadRequest(w, "INVALID_OR_EXPIRED_TOKEN", "Verification link is invalid or expired")
 		return
 	}
-	if h.Cfg.Pages.CallbackURL != "" {
-		http.Redirect(w, r, h.Cfg.Pages.CallbackURL+"?verified=1", http.StatusFound)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *AuthHandlers) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid request body")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	emailAddr := strings.TrimSpace(body.Email)
+	if emailAddr == "" {
+		apierror.BadRequest(w, "INVALID_EMAIL", "Email is required")
+		return
+	}
+	// Always return ok to avoid account enumeration.
+	defer writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+
+	user, err := h.Auth.GetUserByEmail(r.Context(), emailAddr)
+	if err != nil || user == nil || user.EmailVerified {
+		return
+	}
+	token, err := h.Auth.CreateEmailVerificationToken(r.Context(), user.ID)
+	if err != nil || h.Email == nil {
+		return
+	}
+	_ = h.Email.SendEmailVerification(user.Email, h.Email.BuildVerifyURL(token))
 }
 
 func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {

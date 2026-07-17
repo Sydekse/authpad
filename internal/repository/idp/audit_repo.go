@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/auth-project/goauth/internal/database"
+	"github.com/auth-project/authpad/internal/database"
 	"github.com/google/uuid"
 )
 

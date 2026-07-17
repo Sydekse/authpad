@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/apptypes"
 	"github.com/resend/resend-go/v3"
 )
 
@@ -19,23 +19,36 @@ func NewEmailService(cfg apptypes.EmailConfig, pages apptypes.PagesConfig) *Emai
 }
 
 func (s *EmailService) SendPasswordReset(to, resetURL string) error {
-	subject := fmt.Sprintf("Reset your %s password", s.appName())
-	body := fmt.Sprintf("Open this link to reset your password (valid for 5 minutes):\n%s", resetURL)
-	return s.send(to, subject, body, resetURL, "Reset password")
+	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
+		Preview:     fmt.Sprintf("Reset your %s password", s.appName()),
+		Eyebrow:     "Security",
+		Title:       "Reset your password",
+		Intro:       fmt.Sprintf("We received a request to reset the password for your %s account. Use the button below to choose a new one.", s.appName()),
+		ActionURL:   resetURL,
+		ActionLabel: "Reset password",
+		Note:        "This link expires in 5 minutes. If you did not request a reset, you can ignore this email.",
+	})
+	return s.send(to, fmt.Sprintf("Reset your %s password", s.appName()), htmlBody, textBody)
 }
 
 func (s *EmailService) SendEmailVerification(to, verifyURL string) error {
-	subject := fmt.Sprintf("Verify your %s email", s.appName())
-	body := fmt.Sprintf("Open this link to verify your email:\n%s", verifyURL)
-	return s.send(to, subject, body, verifyURL, "Verify email")
+	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
+		Preview:     fmt.Sprintf("Verify your email for %s", s.appName()),
+		Eyebrow:     "Email verification",
+		Title:       "Confirm your email address",
+		Intro:       fmt.Sprintf("Thanks for creating a %s account. Confirm your email to activate it and sign in.", s.appName()),
+		ActionURL:   verifyURL,
+		ActionLabel: "Verify email",
+		Note:        "This link expires in 24 hours. If you did not create an account, you can ignore this email.",
+	})
+	return s.send(to, fmt.Sprintf("Verify your %s email", s.appName()), htmlBody, textBody)
 }
 
-func (s *EmailService) send(to, subject, textBody, actionURL, actionLabel string) error {
+func (s *EmailService) send(to, subject, htmlBody, textBody string) error {
 	if s.cfg.ResendAPIKey == "" || s.cfg.ResendFrom == "" {
 		return nil
 	}
 	client := resend.NewClient(s.cfg.ResendAPIKey)
-	htmlBody := fmt.Sprintf(`<p>%s</p><p><a href="%s">%s</a></p>`, textBody, actionURL, actionLabel)
 	_, err := client.Emails.Send(&resend.SendEmailRequest{
 		From:    s.cfg.ResendFrom,
 		To:      []string{to},
@@ -53,7 +66,7 @@ func (s *EmailService) appName() string {
 	if s.pages.AppName != "" {
 		return s.pages.AppName
 	}
-	return "App"
+	return "Sydek Auth"
 }
 
 func (s *EmailService) BuildResetURL(token string) string {

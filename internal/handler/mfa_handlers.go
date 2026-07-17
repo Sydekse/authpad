@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/auth-project/goauth/internal/service"
-	"github.com/auth-project/goauth/pkg/apierror"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/service"
+	"github.com/auth-project/authpad/pkg/apierror"
+	"github.com/auth-project/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -15,6 +15,29 @@ type MFAHandlers struct {
 	MFA  *service.MFAService
 	Auth *service.AuthService
 	Cfg  *apptypes.AppConfig
+}
+
+func (h *MFAHandlers) ListFactors(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	factors, err := h.MFA.ListFactors(r.Context(), *userID)
+	if err != nil {
+		apierror.Internal(w, "MFA_LIST_FAILED", "Could not list MFA factors")
+		return
+	}
+	out := make([]map[string]any, 0, len(factors))
+	for _, f := range factors {
+		out = append(out, map[string]any{
+			"id":          f.ID.String(),
+			"factor_type": f.FactorType,
+			"label":       f.Label,
+			"verified":    f.Verified,
+			"created_at":  f.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"factors": out})
 }
 
 func (h *MFAHandlers) EnrollTOTP(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,8 @@ type SessionConfig struct {
 	IdleTimeout    time.Duration
 	MaxLifetime    time.Duration
 	RotateInterval time.Duration
+	// RememberMeTTL is used when the client requests "remember me" on login.
+	RememberMeTTL  time.Duration
 	CookieDomain   string
 	CookieSecure   bool
 	CookieName     string
@@ -72,6 +74,12 @@ type Hooks struct {
 	OnSignup       func(ctx context.Context, userID uuid.UUID, email string) error
 	OnLogin        func(ctx context.Context, userID uuid.UUID) error
 	OnDelete       func(ctx context.Context, userID uuid.UUID) error
+	// OnOAuthSignup fires after an OAuth callback provisions a session. isNewUser
+	// is true when the callback created a brand-new account, and false when it
+	// linked a provider to a pre-existing account. Hosts use it to apply the same
+	// defaults (role, account_type, onboarding_status) that password signup does,
+	// since the OAuth flow bypasses the signup handler and OnSignup hook.
+	OnOAuthSignup func(ctx context.Context, userID uuid.UUID, email string, isNewUser bool) error
 }
 
 type FieldType string
@@ -118,6 +126,9 @@ type AppConfig struct {
 	Roles           []RoleDefinition
 	AllowedOrigins  []string
 	Port            string
+	// DisablePublicSignup skips mounting authpad's default POST /auth/signup so a
+	// host application (e.g. Sydek auth-api) can register its own restricted handler.
+	DisablePublicSignup bool
 }
 
 func (c AppConfig) IdPEnabled() bool {

@@ -3,16 +3,17 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/database"
-	"github.com/auth-project/goauth/internal/handler"
-	"github.com/auth-project/goauth/internal/middleware"
-	auth_repo "github.com/auth-project/goauth/internal/repository/auth"
-	idp_repo "github.com/auth-project/goauth/internal/repository/idp"
-	"github.com/auth-project/goauth/internal/security"
-	"github.com/auth-project/goauth/internal/service"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/database"
+	"github.com/auth-project/authpad/internal/handler"
+	"github.com/auth-project/authpad/internal/middleware"
+	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
+	idp_repo "github.com/auth-project/authpad/internal/repository/idp"
+	"github.com/auth-project/authpad/internal/security"
+	"github.com/auth-project/authpad/internal/service"
+	"github.com/auth-project/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -106,7 +107,7 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 	accountSvc := service.NewAccountService(authSvc, idpSvc, userAuthRepo, credRepo, auditSvc, cfg.ProfileSchema, cfg.Hooks)
 	emailSvc := service.NewEmailService(cfg.Email, cfg.Pages)
 	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, userAuthRepo, oauthRepo, auditSvc)
-	mfaSvc := service.NewMFAService(factorRepo, authSvc, auditSvc, cfg.Security.SessionSecret)
+	mfaSvc := service.NewMFAService(factorRepo, authSvc, auditSvc, cfg.Security.SessionSecret, mfaIssuer(cfg))
 
 	return &Server{
 		cfg:   cfg,
@@ -164,17 +165,21 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 	csrf := middleware.CSRF(s.cfg.Security.CSRFEnabled, s.cfg.AllowedOrigins)
 
 	r.Route(basePath, func(r chi.Router) {
-		r.With(rateLimit).Post("/auth/signup", s.auth.Signup)
+		if !s.cfg.DisablePublicSignup {
+			r.With(rateLimit).Post("/auth/signup", s.auth.Signup)
+		}
 		r.With(rateLimit, csrf).Post("/auth/login", s.auth.Login)
 		r.With(csrf).Post("/auth/logout", s.auth.Logout)
 		r.With(csrf).Post("/auth/logout-all", s.auth.LogoutAll)
 		r.Get("/auth/session", s.auth.Session)
 		r.With(rateLimit).Get("/auth/verify-email", s.auth.VerifyEmail)
+		r.With(rateLimit, csrf).Post("/auth/verify-email/resend", s.auth.ResendVerification)
 		r.With(rateLimit).Get("/auth/oauth/{provider}", s.oauth.OAuthInit)
 		r.With(rateLimit).Get("/auth/oauth/{provider}/callback", s.oauth.OAuthCallback)
 		r.With(rateLimit, csrf).Post("/auth/password/reset-request", s.auth.PasswordResetRequest)
 		r.With(rateLimit, csrf).Post("/auth/password/reset", s.auth.PasswordReset)
 
+		r.Get("/auth/mfa", s.mfa.ListFactors)
 		r.With(csrf).Post("/auth/mfa/enroll", s.mfa.EnrollTOTP)
 		r.With(csrf).Post("/auth/mfa/verify", s.mfa.VerifyTOTP)
 		r.With(csrf).Post("/auth/mfa/webauthn/register/begin", s.mfa.WebAuthnRegisterBegin)
@@ -205,4 +210,14 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			r.Get("/admin/audit", s.admin.GetAuditLogs)
 		}
 	})
+}
+
+func mfaIssuer(cfg apptypes.AppConfig) string {
+	if name := strings.TrimSpace(cfg.Pages.AppName); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(cfg.Email.AppName); name != "" {
+		return name
+	}
+	return "Sydek Auth"
 }

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/auth-project/goauth/internal/server"
+	"github.com/auth-project/authpad/internal/server"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"

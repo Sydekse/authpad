@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/apptypes"
-	"github.com/auth-project/goauth/internal/domain/auth"
-	auth_repo "github.com/auth-project/goauth/internal/repository/auth"
+	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/auth-project/authpad/internal/domain/auth"
+	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
 	"github.com/google/uuid"
 )
 
@@ -166,6 +166,21 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 	// Find existing OAuth link
 	existing, _ := s.oauthRepo.GetByProviderAndAccountID(ctx, provider, providerUserID)
 	if existing != nil {
+		if u, _ := s.userRepo.GetByID(ctx, existing.UserID); u != nil && !u.EmailVerified {
+			_ = s.authSvc.MarkEmailVerified(ctx, existing.UserID)
+		}
+		if s.cfg.Hooks.OnOAuthSignup != nil {
+			roles, _ := s.idpSvc.GetRoleNames(ctx, existing.UserID)
+			if len(roles) == 0 {
+				userEmail := email
+				if u, _ := s.userRepo.GetByID(ctx, existing.UserID); u != nil && u.Email != "" {
+					userEmail = u.Email
+				}
+				if err := s.cfg.Hooks.OnOAuthSignup(ctx, existing.UserID, userEmail, false); err != nil {
+					return redirectURI, nil, err
+				}
+			}
+		}
 		token, sess, err := s.authSvc.CreateSession(ctx, existing.UserID, ipAddress, userAgent)
 		if err != nil {
 			return redirectURI, nil, err
@@ -202,6 +217,15 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 		if imageURL != "" {
 			_ = s.idpSvc.UpdateProfile(ctx, user.ID, apptypes.ProfileInput{ImageURL: imageURL})
 		}
+		if s.cfg.Hooks.OnOAuthSignup != nil {
+			if err := s.cfg.Hooks.OnOAuthSignup(ctx, user.ID, email, false); err != nil {
+				return redirectURI, nil, err
+			}
+		}
+		// Returning OAuth users have proven email ownership via the provider.
+		if !user.EmailVerified {
+			_ = s.authSvc.MarkEmailVerified(ctx, user.ID)
+		}
 		token, sess, err := s.authSvc.CreateSession(ctx, user.ID, ipAddress, userAgent)
 		if err != nil {
 			return redirectURI, nil, err
@@ -214,6 +238,8 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 	if err := s.authSvc.CreateUserAuth(ctx, userID, email); err != nil {
 		return redirectURI, nil, err
 	}
+	// OAuth providers already verified the email address.
+	_ = s.authSvc.MarkEmailVerified(ctx, userID)
 	if name == "" {
 		name = email
 	}
@@ -235,6 +261,11 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 	// Optionally update profile image from provider
 	if imageURL != "" {
 		_ = s.idpSvc.UpdateProfile(ctx, userID, apptypes.ProfileInput{ImageURL: imageURL})
+	}
+	if s.cfg.Hooks.OnOAuthSignup != nil {
+		if err := s.cfg.Hooks.OnOAuthSignup(ctx, userID, email, true); err != nil {
+			return redirectURI, nil, err
+		}
 	}
 	token, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
 	if err != nil {

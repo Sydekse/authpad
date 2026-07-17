@@ -1,4 +1,4 @@
-module github.com/auth-project/goauth
+module github.com/auth-project/authpad
 
 go 1.24.0
 
