@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/auth-project/goauth/internal/handler"
-	"github.com/auth-project/goauth/internal/middleware"
-	"github.com/auth-project/goauth/pkg/auth"
+	"github.com/auth-project/authpad/internal/handler"
+	"github.com/auth-project/authpad/internal/middleware"
+	"github.com/auth-project/authpad/pkg/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -66,7 +66,7 @@ func main() {
 	}
 
 	go func() {
-		log.Info().Str("port", cfg.Port).Msg("goauth example server listening")
+		log.Info().Str("port", cfg.Port).Msg("authpad example server listening")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("server error")
 		}

@@ -3,8 +3,8 @@ package auth
 import (
 	"context"
 
-	"github.com/auth-project/goauth/internal/database"
-	"github.com/auth-project/goauth/internal/domain/auth"
+	"github.com/auth-project/authpad/internal/database"
+	"github.com/auth-project/authpad/internal/domain/auth"
 	"github.com/jackc/pgx/v5"
 )
 

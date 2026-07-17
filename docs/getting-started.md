@@ -1,11 +1,11 @@
 # Getting Started
 
-goauth is an embeddable Go authentication library (better-auth-style) with optional internal IdP (profiles, roles, groups).
+authpad is an embeddable Go authentication library (better-auth-style) with optional internal IdP (profiles, roles, groups).
 
 ## Install
 
 ```bash
-go get github.com/auth-project/goauth
+go get github.com/auth-project/authpad
 ```
 
 ## Quick start

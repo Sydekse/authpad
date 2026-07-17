@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
-	"github.com/auth-project/goauth/internal/service"
-	"github.com/auth-project/goauth/pkg/apierror"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/auth-project/authpad/internal/service"
+	"github.com/auth-project/authpad/pkg/apierror"
 	"github.com/google/uuid"
 )
 
@@ -61,8 +62,11 @@ func getSessionToken(r *http.Request, cfg *apptypes.AppConfig) string {
 	return ""
 }
 
-func setSessionCookie(w http.ResponseWriter, token string, cfg *apptypes.AppConfig) {
+func setSessionCookie(w http.ResponseWriter, token string, cfg *apptypes.AppConfig, ttl ...time.Duration) {
 	maxAge := int(cfg.Session.TTL.Seconds())
+	if len(ttl) > 0 && ttl[0] > 0 {
+		maxAge = int(ttl[0].Seconds())
+	}
 	if maxAge <= 0 {
 		maxAge = 7 * 24 * 3600
 	}

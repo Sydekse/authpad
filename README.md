@@ -36,7 +36,7 @@ go run ./cmd/example
 ## Library usage
 
 ```go
-import "github.com/auth-project/goauth/pkg/auth"
+import "github.com/auth-project/authpad/pkg/auth"
 
 cfg := auth.DefaultConfig()
 cfg.AuthDatabaseURL = os.Getenv("AUTH_DATABASE_URL")

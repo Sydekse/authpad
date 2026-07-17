@@ -3,8 +3,8 @@ package idp
 import (
 	"context"
 
-	"github.com/auth-project/goauth/internal/database"
-	"github.com/auth-project/goauth/internal/domain/idp"
+	"github.com/auth-project/authpad/internal/database"
+	"github.com/auth-project/authpad/internal/domain/idp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )

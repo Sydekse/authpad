@@ -8,10 +8,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/auth-project/goauth/internal/domain/auth"
-	auth_repo "github.com/auth-project/goauth/internal/repository/auth"
-	"github.com/auth-project/goauth/internal/security"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/domain/auth"
+	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
+	"github.com/auth-project/authpad/internal/security"
+	"github.com/auth-project/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 
@@ -145,9 +145,6 @@ func (s *AuthService) ValidatePassword(ctx context.Context, email, password stri
 	if u.Status != "active" {
 		return nil, ErrInvalidCredentials
 	}
-	if s.requireVerification && !u.EmailVerified {
-		return nil, ErrEmailNotVerified
-	}
 	cred, err := s.credRepo.GetByUserID(ctx, u.ID)
 	if err != nil || cred == nil {
 		return nil, ErrInvalidCredentials
@@ -156,18 +153,42 @@ func (s *AuthService) ValidatePassword(ctx context.Context, email, password stri
 	if err != nil || !ok {
 		return nil, ErrInvalidCredentials
 	}
+	if s.requireVerification && !u.EmailVerified {
+		return nil, ErrEmailNotVerified
+	}
 	return u, nil
 }
 
+func (s *AuthService) GetUserByEmail(ctx context.Context, email string) (*auth.UserAuth, error) {
+	return s.userRepo.GetByEmail(ctx, email)
+}
+
+func (s *AuthService) MarkEmailVerified(ctx context.Context, userID uuid.UUID) error {
+	return s.userRepo.SetEmailVerified(ctx, userID)
+}
+
 func (s *AuthService) CreateSession(ctx context.Context, userID uuid.UUID, ipAddress, userAgent string) (token string, sess *auth.Session, err error) {
+	return s.CreateSessionWithTTL(ctx, userID, ipAddress, userAgent, s.sessionCfg.TTL)
+}
+
+// CreateSessionWithTTL creates a session that expires after ttl.
+// Pass Session.RememberMeTTL for "remember me" logins (typically 30 days).
+func (s *AuthService) CreateSessionWithTTL(ctx context.Context, userID uuid.UUID, ipAddress, userAgent string, ttl time.Duration) (token string, sess *auth.Session, err error) {
 	token, err = security.GenerateOpaqueToken()
 	if err != nil {
 		return "", nil, err
 	}
 	tokenHash := security.HashToken(token)
 	now := time.Now()
-	expiresAt := now.Add(s.sessionCfg.TTL)
-	if s.sessionCfg.MaxLifetime > 0 && expiresAt.After(now.Add(s.sessionCfg.MaxLifetime)) {
+	if ttl <= 0 {
+		ttl = s.sessionCfg.TTL
+	}
+	if ttl <= 0 {
+		ttl = 7 * 24 * time.Hour
+	}
+	expiresAt := now.Add(ttl)
+	// Cap by MaxLifetime unless the requested TTL is explicitly longer (remember-me).
+	if s.sessionCfg.MaxLifetime > 0 && ttl <= s.sessionCfg.MaxLifetime && expiresAt.After(now.Add(s.sessionCfg.MaxLifetime)) {
 		expiresAt = now.Add(s.sessionCfg.MaxLifetime)
 	}
 	sess = &auth.Session{
@@ -197,11 +218,13 @@ func (s *AuthService) GetSessionByToken(ctx context.Context, token string) (*aut
 	if err != nil || sess == nil {
 		return nil, ErrSessionNotFound
 	}
-	if s.sessionCfg.IdleTimeout > 0 && time.Since(sess.LastActiveAt) > s.sessionCfg.IdleTimeout {
+	// Remember-me sessions (≈30d lifetime) ignore idle timeout and only expire at expires_at.
+	rememberMe := sess.ExpiresAt.Sub(sess.CreatedAt) >= 20*24*time.Hour
+	if !rememberMe && s.sessionCfg.IdleTimeout > 0 && time.Since(sess.LastActiveAt) > s.sessionCfg.IdleTimeout {
 		_ = s.sessionRepo.RevokeByID(ctx, sess.ID)
 		return nil, ErrSessionNotFound
 	}
-	if s.sessionCfg.MaxLifetime > 0 && time.Since(sess.CreatedAt) > s.sessionCfg.MaxLifetime {
+	if !rememberMe && s.sessionCfg.MaxLifetime > 0 && time.Since(sess.CreatedAt) > s.sessionCfg.MaxLifetime {
 		_ = s.sessionRepo.RevokeByID(ctx, sess.ID)
 		return nil, ErrSessionNotFound
 	}

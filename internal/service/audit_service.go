@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	auth_repo "github.com/auth-project/goauth/internal/repository/auth"
-	idp_repo "github.com/auth-project/goauth/internal/repository/idp"
+	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
+	idp_repo "github.com/auth-project/authpad/internal/repository/idp"
 	"github.com/google/uuid"
 )
 

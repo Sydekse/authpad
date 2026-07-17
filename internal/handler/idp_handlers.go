@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/domain/idp"
-	"github.com/auth-project/goauth/internal/service"
-	"github.com/auth-project/goauth/pkg/apierror"
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/domain/idp"
+	"github.com/auth-project/authpad/internal/service"
+	"github.com/auth-project/authpad/pkg/apierror"
+	"github.com/auth-project/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

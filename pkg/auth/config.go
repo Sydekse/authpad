@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/goauth/internal/apptypes"
+	"github.com/auth-project/authpad/internal/apptypes"
 )
 
 type (
@@ -38,10 +38,11 @@ func DefaultConfig() Config {
 	return Config{
 		Env: "development",
 		Session: SessionConfig{
-			TTL:         7 * 24 * time.Hour,
-			IdleTimeout: 24 * time.Hour,
-			MaxLifetime: 30 * 24 * time.Hour,
-			CookieName:  "session",
+			TTL:           7 * 24 * time.Hour,
+			IdleTimeout:   24 * time.Hour,
+			MaxLifetime:   30 * 24 * time.Hour,
+			RememberMeTTL: 30 * 24 * time.Hour,
+			CookieName:    "session",
 		},
 		Security: SecurityConfig{
 			AdminRoleName:  "admin",

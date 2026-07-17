@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/auth-project/goauth/pkg/auth"
+	"github.com/auth-project/authpad/pkg/auth"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 )
