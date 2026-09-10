@@ -1,0 +1,10 @@
+BEGIN;
+
+DROP TABLE IF EXISTS mfa_recovery_codes;
+
+ALTER TABLE factors DROP COLUMN IF EXISTS sign_count;
+ALTER TABLE factors DROP COLUMN IF EXISTS public_key;
+ALTER TABLE factors DROP COLUMN IF EXISTS credential_id;
+ALTER TABLE factors DROP COLUMN IF EXISTS label;
+
+COMMIT;

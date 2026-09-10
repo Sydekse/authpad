@@ -1,0 +1,10 @@
+BEGIN;
+
+DROP TABLE IF EXISTS idp_audit_logs;
+DROP TABLE IF EXISTS user_groups;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS users_profile;
+
+COMMIT;

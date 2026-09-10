@@ -1,0 +1,10 @@
+BEGIN;
+
+DROP TABLE IF EXISTS auth_audit_logs;
+DROP TABLE IF EXISTS factors;
+DROP TABLE IF EXISTS oauth_accounts;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS credentials;
+DROP TABLE IF EXISTS users_auth;
+
+COMMIT;

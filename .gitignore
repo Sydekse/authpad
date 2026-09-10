@@ -4,7 +4,8 @@
 *.dll
 *.so
 *.dylib
-beblocky-auth-service
+/authpad
+/auth-service
 
 # Environment
 .env

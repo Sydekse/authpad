@@ -12,3 +12,4 @@
 - Optional workspace-style company tenancy (`AUTHPAD_TENANCY_ENABLED`)
 - Hosts can skip overlapping routes with `SkipHTTPPaths`
 - Canonical module path `github.com/Sydekse/authpad`
+- Every embedded migration ships an accompanying down migration
