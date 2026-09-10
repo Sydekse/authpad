@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/authpad/internal/domain/idp"
-	idp_repo "github.com/auth-project/authpad/internal/repository/idp"
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/domain/idp"
+	idp_repo "github.com/Sydekse/authpad/internal/repository/idp"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 

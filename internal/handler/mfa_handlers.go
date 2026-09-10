@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/auth-project/authpad/internal/service"
-	"github.com/auth-project/authpad/pkg/apierror"
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/service"
+	"github.com/Sydekse/authpad/pkg/apierror"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

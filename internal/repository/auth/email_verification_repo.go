@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/auth-project/authpad/internal/database"
+	"github.com/Sydekse/authpad/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )

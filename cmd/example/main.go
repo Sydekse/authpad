@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/auth-project/authpad/internal/handler"
-	"github.com/auth-project/authpad/internal/middleware"
-	"github.com/auth-project/authpad/pkg/auth"
+	"github.com/Sydekse/authpad/internal/handler"
+	"github.com/Sydekse/authpad/internal/middleware"
+	"github.com/Sydekse/authpad/pkg/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"

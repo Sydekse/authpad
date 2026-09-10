@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/authpad/internal/apptypes"
-	"github.com/auth-project/authpad/internal/domain/auth"
-	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
+	"github.com/Sydekse/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/domain/auth"
+	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
 	"github.com/google/uuid"
 )
 

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
-	"github.com/auth-project/authpad/internal/apptypes"
+	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 

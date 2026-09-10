@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/apptypes"
 )
 
 type (

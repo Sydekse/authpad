@@ -8,10 +8,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/auth-project/authpad/internal/domain/auth"
-	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
-	"github.com/auth-project/authpad/internal/security"
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/domain/auth"
+	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
+	"github.com/Sydekse/authpad/internal/security"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 
