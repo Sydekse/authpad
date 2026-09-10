@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Sydekse/authpad/internal/security"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
@@ -159,7 +159,7 @@ func CSRF(cfg CSRFConfig) func(next http.Handler) http.Handler {
 			}
 			cookie, _ := r.Cookie(CSRFCookieName)
 			header := r.Header.Get("X-CSRF-Token")
-			if cookie == nil || header == "" || cookie.Value != header {
+			if cookie == nil || header == "" || !security.EqualSecret(cookie.Value, header) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte(`{"error":{"code":"CSRF_INVALID","message":"Invalid CSRF token"}}`))
@@ -194,13 +194,12 @@ func isValidatedServiceKey(r *http.Request, keys map[string]string) bool {
 	if provided == "" || len(keys) == 0 {
 		return false
 	}
-	providedB := []byte(provided)
 	for _, allowed := range keys {
 		allowed = strings.TrimSpace(allowed)
 		if allowed == "" {
 			continue
 		}
-		if subtle.ConstantTimeCompare(providedB, []byte(allowed)) == 1 {
+		if security.EqualSecret(provided, allowed) {
 			return true
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/security"
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/google/uuid"
@@ -173,7 +174,7 @@ func isServiceAuthorized(r *http.Request, cfg *apptypes.AppConfig) bool {
 		return false
 	}
 	for _, allowed := range cfg.Security.ServiceKeys {
-		if key == allowed {
+		if allowed != "" && security.EqualSecret(key, allowed) {
 			return true
 		}
 	}
