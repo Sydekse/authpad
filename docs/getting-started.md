@@ -10,7 +10,7 @@ go get github.com/Sydekse/authpad
 
 ## Quick start
 
-1. Set environment variables (see `.env.example` pattern in `cmd/example`).
+1. Set environment variables (copy [`.env.example`](../.env.example)).
 2. Run migrations:
 
 ```bash
