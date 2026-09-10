@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -121,24 +122,42 @@ func redisRateLimiter(requestsPerMinute, burst int, redisURL string) func(next h
 	}
 }
 
-const csrfCookie = "csrf_token"
+const CSRFCookieName = "csrf_token"
 
-func CSRF(enabled bool, allowedOrigins []string) func(next http.Handler) http.Handler {
-	if !enabled {
+// CSRFConfig controls double-submit CSRF enforcement.
+type CSRFConfig struct {
+	Enabled           bool
+	ServiceKeys       map[string]string
+	SessionCookieName string
+	// ValidateBearer is consulted only when Authorization Bearer is present
+	// AND the session cookie is absent. Cookie sessions always require CSRF.
+	ValidateBearer func(r *http.Request, token string) bool
+}
+
+func CSRF(cfg CSRFConfig) func(next http.Handler) http.Handler {
+	if !cfg.Enabled {
 		return func(next http.Handler) http.Handler { return next }
+	}
+	cookieName := cfg.SessionCookieName
+	if cookieName == "" {
+		cookieName = "session"
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
-				ensureCSRFCookie(w, r)
+				EnsureCSRFCookie(w, r)
 				next.ServeHTTP(w, r)
 				return
 			}
-			if isSafeServiceCall(r) {
+			if isValidatedServiceKey(r, cfg.ServiceKeys) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			cookie, _ := r.Cookie(csrfCookie)
+			if isValidatedBearerOnly(r, cookieName, cfg.ValidateBearer) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			cookie, _ := r.Cookie(CSRFCookieName)
 			header := r.Header.Get("X-CSRF-Token")
 			if cookie == nil || header == "" || cookie.Value != header {
 				w.Header().Set("Content-Type", "application/json")
@@ -151,23 +170,57 @@ func CSRF(enabled bool, allowedOrigins []string) func(next http.Handler) http.Ha
 	}
 }
 
-func ensureCSRFCookie(w http.ResponseWriter, r *http.Request) {
-	if c, _ := r.Cookie(csrfCookie); c != nil && c.Value != "" {
-		return
+// EnsureCSRFCookie issues a csrf_token cookie if one is not already present
+// and returns the token value.
+func EnsureCSRFCookie(w http.ResponseWriter, r *http.Request) string {
+	if c, _ := r.Cookie(CSRFCookieName); c != nil && c.Value != "" {
+		return c.Value
 	}
 	buf := make([]byte, 16)
 	_, _ = rand.Read(buf)
 	token := hex.EncodeToString(buf)
 	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookie,
+		Name:     CSRFCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: false,
 		SameSite: http.SameSiteLaxMode,
 	})
+	return token
 }
 
-func isSafeServiceCall(r *http.Request) bool {
-	return strings.TrimSpace(r.Header.Get("X-Service-Key")) != "" ||
-		strings.HasPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
+func isValidatedServiceKey(r *http.Request, keys map[string]string) bool {
+	provided := strings.TrimSpace(r.Header.Get("X-Service-Key"))
+	if provided == "" || len(keys) == 0 {
+		return false
+	}
+	providedB := []byte(provided)
+	for _, allowed := range keys {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare(providedB, []byte(allowed)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidatedBearerOnly(r *http.Request, sessionCookieName string, validate func(*http.Request, string) bool) bool {
+	if validate == nil {
+		return false
+	}
+	if c, _ := r.Cookie(sessionCookieName); c != nil && strings.TrimSpace(c.Value) != "" {
+		return false
+	}
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
+		return false
+	}
+	token := strings.TrimSpace(h[7:])
+	if token == "" {
+		return false
+	}
+	return validate(r, token)
 }
