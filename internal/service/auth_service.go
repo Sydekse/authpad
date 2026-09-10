@@ -8,37 +8,37 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/domain/auth"
 	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
 	"github.com/Sydekse/authpad/internal/security"
-	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 
 var (
-	ErrInvalidCredentials     = errors.New("invalid credentials")
-	ErrUserNotFound           = errors.New("user not found")
-	ErrSessionNotFound        = errors.New("session not found")
-	ErrResetTokenInvalid      = errors.New("reset token invalid or expired")
-	ErrNoPasswordCredential   = errors.New("user has no password credential")
-	ErrEmailNotVerified       = errors.New("email not verified")
-	ErrVerifyTokenInvalid     = errors.New("verification token invalid or expired")
-	ErrWeakPassword           = errors.New("password does not meet policy")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrUserNotFound         = errors.New("user not found")
+	ErrSessionNotFound      = errors.New("session not found")
+	ErrResetTokenInvalid    = errors.New("reset token invalid or expired")
+	ErrNoPasswordCredential = errors.New("user has no password credential")
+	ErrEmailNotVerified     = errors.New("email not verified")
+	ErrVerifyTokenInvalid   = errors.New("verification token invalid or expired")
+	ErrWeakPassword         = errors.New("password does not meet policy")
 )
 
 // AuthService handles authentication (Auth DB only).
 type AuthService struct {
-	userRepo             *auth_repo.UserAuthRepo
-	credRepo             *auth_repo.CredentialRepo
-	sessionRepo          *auth_repo.SessionRepo
-	resetTokenRepo       *auth_repo.PasswordResetTokenRepo
-	verifyRepo           *auth_repo.EmailVerificationRepo
-	factorRepo           *auth_repo.FactorRepo
-	password             *security.PasswordService
-	sessionCfg           apptypes.SessionConfig
-	passwordPolicy       apptypes.PasswordPolicy
-	requireVerification  bool
-	resetTokenTTL        time.Duration
+	userRepo            *auth_repo.UserAuthRepo
+	credRepo            *auth_repo.CredentialRepo
+	sessionRepo         *auth_repo.SessionRepo
+	resetTokenRepo      *auth_repo.PasswordResetTokenRepo
+	verifyRepo          *auth_repo.EmailVerificationRepo
+	factorRepo          *auth_repo.FactorRepo
+	password            *security.PasswordService
+	sessionCfg          apptypes.SessionConfig
+	passwordPolicy      apptypes.PasswordPolicy
+	requireVerification bool
+	resetTokenTTL       time.Duration
 }
 
 func NewAuthService(
@@ -215,7 +215,10 @@ func (s *AuthService) GetUserByID(ctx context.Context, id uuid.UUID) (*auth.User
 func (s *AuthService) GetSessionByToken(ctx context.Context, token string) (*auth.Session, error) {
 	tokenHash := security.HashToken(token)
 	sess, err := s.sessionRepo.GetByTokenHash(ctx, tokenHash)
-	if err != nil || sess == nil {
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
 		return nil, ErrSessionNotFound
 	}
 	// Remember-me sessions (≈30d lifetime) ignore idle timeout and only expire at expires_at.
