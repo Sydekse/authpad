@@ -8,11 +8,23 @@ import (
 	"github.com/Sydekse/authpad/pkg/auth"
 )
 
-func TestMigrateSameDatabaseTwoLedgers(t *testing.T) {
+// testDSN returns the integration database, skipping locally when it is not
+// configured. Under CI a missing DSN is a failure instead, so these tests
+// cannot silently stop running.
+func testDSN(t *testing.T) string {
+	t.Helper()
 	dsn := os.Getenv("AUTHPAD_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("AUTHPAD_TEST_DATABASE_URL must be set in CI")
+		}
 		t.Skip("AUTHPAD_TEST_DATABASE_URL not set")
 	}
+	return dsn
+}
+
+func TestMigrateSameDatabaseTwoLedgers(t *testing.T) {
+	dsn := testDSN(t)
 	ctx := context.Background()
 	err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
 		AuthTable: "schema_migrations_auth",
