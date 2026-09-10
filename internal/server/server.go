@@ -162,7 +162,11 @@ func (s *Server) Ready(ctx context.Context) error {
 // Mount registers routes on a chi router.
 func (s *Server) Mount(r chi.Router, basePath string) {
 	rateLimit := middleware.RateLimiter(s.cfg.Security.RateLimitRPM, s.cfg.Security.RateLimitBurst, s.cfg.Security.RedisURL)
-	csrf := middleware.CSRF(s.cfg.Security.CSRFEnabled, s.cfg.AllowedOrigins)
+	csrf := middleware.CSRF(middleware.CSRFConfig{
+		Enabled:           s.cfg.Security.CSRFEnabled,
+		ServiceKeys:       s.cfg.Security.ServiceKeys,
+		SessionCookieName: s.cfg.Session.CookieName,
+	})
 
 	r.Route(basePath, func(r chi.Router) {
 		if !s.cfg.DisablePublicSignup {
