@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/Sydekse/authpad/pkg/auth"
@@ -17,10 +16,7 @@ import (
 
 func testAuth(t *testing.T) (*auth.Auth, auth.Config) {
 	t.Helper()
-	dsn := os.Getenv("AUTHPAD_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AUTHPAD_TEST_DATABASE_URL not set")
-	}
+	dsn := testDSN(t)
 	ctx := context.Background()
 	if err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
 		AuthTable: "schema_migrations_auth",
