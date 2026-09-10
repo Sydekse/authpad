@@ -91,21 +91,25 @@ func (s *EmailService) appName() string {
 }
 
 func (s *EmailService) BuildResetURL(token string) string {
-	base := strings.TrimSuffix(s.pages.ResetPasswordURL, "/")
-	if base == "" {
-		return "/reset-password?token=" + token
-	}
-	sep := "?"
-	if strings.Contains(base, "?") {
-		sep = "&"
-	}
-	return base + sep + "token=" + token
+	return BuildResetURL(s.pages, token)
 }
 
 func (s *EmailService) BuildVerifyURL(token string) string {
-	base := strings.TrimSuffix(s.pages.VerifyEmailURL, "/")
+	return BuildVerifyURL(s.pages, token)
+}
+
+func BuildResetURL(pages apptypes.PagesConfig, token string) string {
+	return appendToken(pages.ResetPasswordURL, "/reset-password", token)
+}
+
+func BuildVerifyURL(pages apptypes.PagesConfig, token string) string {
+	return appendToken(pages.VerifyEmailURL, "/verify-email", token)
+}
+
+func appendToken(base, fallback, token string) string {
+	base = strings.TrimSuffix(base, "/")
 	if base == "" {
-		return "/verify-email?token=" + token
+		return fallback + "?token=" + token
 	}
 	sep := "?"
 	if strings.Contains(base, "?") {

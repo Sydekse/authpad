@@ -19,7 +19,7 @@ type AuthHandlers struct {
 	Auth    *service.AuthService
 	IdP     *service.IdPService
 	MFA     *service.MFAService
-	Email   *service.EmailService
+	Email   apptypes.Mailer
 	Audit   *service.AuditService
 	Orgs    *service.OrgService
 	Cfg     *apptypes.AppConfig
@@ -107,7 +107,7 @@ func (h *AuthHandlers) Signup(w http.ResponseWriter, r *http.Request) {
 
 	if h.Cfg.Email.RequireVerification {
 		if token, err := h.Auth.CreateEmailVerificationToken(r.Context(), result.UserID); err == nil && h.Email != nil {
-			_ = h.Email.SendEmailVerification(result.Email, h.Email.BuildVerifyURL(token))
+			_ = h.Email.SendEmailVerification(result.Email, service.BuildVerifyURL(h.Cfg.Pages, token))
 		}
 		// Do not log the user in until email is verified.
 		if result.SessionID != uuid.Nil {
@@ -228,7 +228,7 @@ func (h *AuthHandlers) PasswordResetRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if token != "" && h.Email != nil {
-		resetURL := h.Email.BuildResetURL(token)
+		resetURL := service.BuildResetURL(h.Cfg.Pages, token)
 		if err := h.Email.SendPasswordReset(email, resetURL); err != nil {
 			log.Error().Err(err).Msg("password reset email failed")
 		}
@@ -301,7 +301,7 @@ func (h *AuthHandlers) ResendVerification(w http.ResponseWriter, r *http.Request
 	if err != nil || h.Email == nil {
 		return
 	}
-	_ = h.Email.SendEmailVerification(user.Email, h.Email.BuildVerifyURL(token))
+	_ = h.Email.SendEmailVerification(user.Email, service.BuildVerifyURL(h.Cfg.Pages, token))
 }
 
 func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {

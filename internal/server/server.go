@@ -166,7 +166,7 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 			Auth:    authSvc,
 			IdP:     idpSvc,
 			MFA:     mfaSvc,
-			Email:   emailSvc,
+			Email:   mailer,
 			Audit:   auditSvc,
 			Orgs:    orgSvc,
 			Cfg:     &cfg,
