@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/database"
 	"github.com/Sydekse/authpad/internal/handler"
 	"github.com/Sydekse/authpad/internal/middleware"
@@ -13,20 +15,27 @@ import (
 	idp_repo "github.com/Sydekse/authpad/internal/repository/idp"
 	"github.com/Sydekse/authpad/internal/security"
 	"github.com/Sydekse/authpad/internal/service"
-	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 )
 
 // Server is the wired auth library instance.
 type Server struct {
-	cfg   apptypes.AppConfig
-	auth  *handler.AuthHandlers
-	idp   *handler.IdPHandlers
-	oauth *handler.OAuthHandlers
-	admin *handler.AdminHandlers
-	mfa   *handler.MFAHandlers
-	authDB *database.AuthDB
-	idpDB  *database.IdPDB
+	cfg        apptypes.AppConfig
+	auth       *handler.AuthHandlers
+	idp        *handler.IdPHandlers
+	oauth      *handler.OAuthHandlers
+	admin      *handler.AdminHandlers
+	mfa        *handler.MFAHandlers
+	invites    *handler.InviteHandlers
+	orgs       *handler.OrgHandlers
+	authDB     *database.AuthDB
+	idpDB      *database.IdPDB
+	AuthSvc    *service.AuthService
+	AccountSvc *service.AccountService
+	IdPSvc     *service.IdPService
+	OrgSvc     *service.OrgService
+	InviteSvc  *service.InviteService
+	Password   *security.PasswordService
 }
 
 // New wires dependencies and returns a ready server.
@@ -48,6 +57,25 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 	}
 	if cfg.Email.AppName == "" {
 		cfg.Email.AppName = cfg.Pages.AppName
+	}
+	if cfg.APIBasePath == "" {
+		cfg.APIBasePath = "/api/v1"
+	}
+	if cfg.Tenancy.Enabled {
+		if cfg.Tenancy.DefaultOrgRole == "" {
+			cfg.Tenancy.DefaultOrgRole = "member"
+		}
+		if len(cfg.Tenancy.OrgRoles) == 0 {
+			cfg.Tenancy.OrgRoles = []apptypes.RoleDefinition{
+				{Name: "owner", Description: "Organization owner"},
+				{Name: "admin", Description: "Organization admin"},
+				{Name: "member", Description: "Organization member"},
+			}
+		}
+		if !cfg.Tenancy.AllowCreateOrganization && !cfg.Tenancy.AllowPersonalAccounts && !cfg.Tenancy.RequireOnSignup {
+			cfg.Tenancy.AllowCreateOrganization = true
+			cfg.Tenancy.AllowPersonalAccounts = true
+		}
 	}
 
 	ctx := context.Background()
@@ -106,19 +134,41 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 
 	accountSvc := service.NewAccountService(authSvc, idpSvc, userAuthRepo, credRepo, auditSvc, cfg.ProfileSchema, cfg.Hooks)
 	emailSvc := service.NewEmailService(cfg.Email, cfg.Pages)
-	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, userAuthRepo, oauthRepo, auditSvc)
+	var mailer apptypes.Mailer = emailSvc
+	if cfg.Mailer != nil {
+		mailer = cfg.Mailer
+	}
+	oauthStateRepo := auth_repo.NewOAuthStateRepo(authDB)
 	mfaSvc := service.NewMFAService(factorRepo, authSvc, auditSvc, cfg.Security.SessionSecret, mfaIssuer(cfg))
 
-	return &Server{
-		cfg:   cfg,
-		authDB: authDB,
-		idpDB:  idpDB,
+	var inviteSvc *service.InviteService
+	var orgSvc *service.OrgService
+	if idpDB != nil {
+		inviteRepo := idp_repo.NewInvitationRepo(idpDB)
+		inviteSvc = service.NewInviteService(inviteRepo, accountSvc, idpSvc, &cfg)
+		orgRepo := idp_repo.NewOrgRepo(idpDB)
+		orgSvc = service.NewOrgService(orgRepo, &cfg, authSvc)
+	}
+	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, mfaSvc, userAuthRepo, oauthRepo, oauthStateRepo, auditSvc, orgSvc)
+
+	srv := &Server{
+		cfg:        cfg,
+		authDB:     authDB,
+		idpDB:      idpDB,
+		AuthSvc:    authSvc,
+		AccountSvc: accountSvc,
+		IdPSvc:     idpSvc,
+		OrgSvc:     orgSvc,
+		InviteSvc:  inviteSvc,
+		Password:   passwordSvc,
 		auth: &handler.AuthHandlers{
 			Account: accountSvc,
 			Auth:    authSvc,
 			IdP:     idpSvc,
+			MFA:     mfaSvc,
 			Email:   emailSvc,
 			Audit:   auditSvc,
+			Orgs:    orgSvc,
 			Cfg:     &cfg,
 		},
 		idp: &handler.IdPHandlers{
@@ -126,12 +176,20 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 			IdP:     idpSvc,
 			Account: accountSvc,
 			Audit:   auditSvc,
+			Orgs:    orgSvc,
 			Cfg:     &cfg,
 		},
 		oauth: &handler.OAuthHandlers{OAuth: oauthSvc, Cfg: &cfg},
 		admin: &handler.AdminHandlers{IdP: idpSvc, Auth: authSvc, Audit: auditSvc, Cfg: &cfg},
 		mfa:   &handler.MFAHandlers{MFA: mfaSvc, Auth: authSvc, Cfg: &cfg},
-	}, nil
+	}
+	if inviteSvc != nil {
+		srv.invites = &handler.InviteHandlers{Invites: inviteSvc, Email: mailer, Auth: authSvc, IdP: idpSvc, Cfg: &cfg}
+	}
+	if orgSvc != nil {
+		srv.orgs = &handler.OrgHandlers{Orgs: orgSvc, Auth: authSvc, Email: mailer, Cfg: &cfg}
+	}
+	return srv, nil
 }
 
 // Close releases database connections.
@@ -161,18 +219,32 @@ func (s *Server) Ready(ctx context.Context) error {
 
 // Mount registers routes on a chi router.
 func (s *Server) Mount(r chi.Router, basePath string) {
+	basePath = strings.TrimSuffix(basePath, "/")
+	if basePath == "" {
+		basePath = "/api/v1"
+	}
+	if s.auth != nil && s.auth.Cfg != nil {
+		s.auth.Cfg.APIBasePath = basePath
+	}
+
 	rateLimit := middleware.RateLimiter(s.cfg.Security.RateLimitRPM, s.cfg.Security.RateLimitBurst, s.cfg.Security.RedisURL)
 	csrf := middleware.CSRF(middleware.CSRFConfig{
 		Enabled:           s.cfg.Security.CSRFEnabled,
 		ServiceKeys:       s.cfg.Security.ServiceKeys,
 		SessionCookieName: s.cfg.Session.CookieName,
+		ValidateBearer: func(r *http.Request, token string) bool {
+			sess, err := s.AuthSvc.GetSessionByToken(r.Context(), token)
+			return err == nil && sess != nil && !sess.MFAPending
+		},
 	})
 
 	r.Route(basePath, func(r chi.Router) {
-		if !s.cfg.DisablePublicSignup {
+		if !s.cfg.DisablePublicSignup && !s.skipPath("/auth/signup") {
 			r.With(rateLimit).Post("/auth/signup", s.auth.Signup)
 		}
-		r.With(rateLimit, csrf).Post("/auth/login", s.auth.Login)
+		if !s.skipPath("/auth/login") {
+			r.With(rateLimit, csrf).Post("/auth/login", s.auth.Login)
+		}
 		r.With(csrf).Post("/auth/logout", s.auth.Logout)
 		r.With(csrf).Post("/auth/logout-all", s.auth.LogoutAll)
 		r.Get("/auth/session", s.auth.Session)
@@ -186,6 +258,7 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 		r.Get("/auth/mfa", s.mfa.ListFactors)
 		r.With(csrf).Post("/auth/mfa/enroll", s.mfa.EnrollTOTP)
 		r.With(csrf).Post("/auth/mfa/verify", s.mfa.VerifyTOTP)
+		r.With(rateLimit, csrf).Post("/auth/mfa/challenge", s.mfa.Challenge)
 		r.With(csrf).Post("/auth/mfa/webauthn/register/begin", s.mfa.WebAuthnRegisterBegin)
 		r.With(csrf).Post("/auth/mfa/webauthn/register/finish", s.mfa.WebAuthnRegisterFinish)
 		r.With(csrf).Delete("/auth/mfa/{id}", s.mfa.DeleteFactor)
@@ -206,6 +279,10 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			r.Get("/account/export", s.idp.ExportAccount)
 			r.With(csrf).Delete("/account", s.idp.DeleteAccount)
 
+			if !s.skipPath("/admin/roles") {
+				r.Get("/admin/roles", s.admin.ListRoles)
+				r.With(csrf).Post("/admin/roles", s.admin.CreateRole)
+			}
 			r.With(csrf).Post("/admin/roles/assign", s.admin.AssignRole)
 			r.With(csrf).Post("/admin/roles/revoke", s.admin.RevokeRole)
 			r.With(csrf).Post("/admin/groups", s.admin.CreateGroup)
@@ -213,7 +290,46 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			r.With(csrf).Delete("/admin/groups/{id}/members/{userId}", s.admin.RemoveGroupMember)
 			r.Get("/admin/audit", s.admin.GetAuditLogs)
 		}
+
+		if s.cfg.Invitations.Enabled && s.invites != nil && !s.skipPath("/admin/invitations") {
+			r.With(rateLimit).Get("/invitations/{token}/validate", s.invites.Validate)
+			r.With(csrf).Post("/admin/invitations", s.invites.Create)
+			r.Get("/admin/invitations", s.invites.List)
+			r.With(csrf).Delete("/admin/invitations/{id}", s.invites.Revoke)
+			if !s.skipPath("/auth/signup/invite") {
+				r.With(rateLimit, csrf).Post("/auth/signup/invite", s.invites.Redeem)
+			}
+		}
+
+		if s.cfg.Tenancy.Enabled && s.orgs != nil && !s.skipPath("/organizations") {
+			r.With(csrf).Post("/organizations", s.orgs.Create)
+			r.Get("/organizations", s.orgs.List)
+			r.Get("/organizations/{slug}", s.orgs.Get)
+			r.With(csrf).Patch("/organizations/{slug}", s.orgs.Patch)
+			r.Get("/organizations/{slug}/members", s.orgs.Members)
+			r.With(csrf).Post("/organizations/{slug}/invitations", s.orgs.Invite)
+			r.With(csrf).Delete("/organizations/{slug}/invitations/{id}", s.orgs.RevokeInvite)
+			r.With(csrf).Post("/organizations/invitations/accept", s.orgs.AcceptInvite)
+			r.With(csrf).Post("/session/organization", s.orgs.Switch)
+		}
 	})
+}
+
+func (s *Server) skipPath(path string) bool {
+	want := strings.TrimSuffix(strings.TrimSpace(path), "/")
+	for _, p := range s.cfg.SkipHTTPPaths {
+		if strings.TrimSuffix(strings.TrimSpace(p), "/") == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) AuthHandlersCfg() *apptypes.AppConfig {
+	if s.auth != nil && s.auth.Cfg != nil {
+		return s.auth.Cfg
+	}
+	return &s.cfg
 }
 
 func mfaIssuer(cfg apptypes.AppConfig) string {
@@ -223,5 +339,5 @@ func mfaIssuer(cfg apptypes.AppConfig) string {
 	if name := strings.TrimSpace(cfg.Email.AppName); name != "" {
 		return name
 	}
-	return "Sydek Auth"
+	return "Auth"
 }

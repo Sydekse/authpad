@@ -59,6 +59,27 @@ func (s *EmailService) send(to, subject, htmlBody, textBody string) error {
 	return err
 }
 
+func (s *EmailService) SendInvitation(to, inviteURL, role string) error {
+	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
+		Preview:     fmt.Sprintf("You're invited to %s", s.appName()),
+		Eyebrow:     "Invitation",
+		Title:       "You've been invited",
+		Intro:       fmt.Sprintf("You have been invited to join %s%s. Use the button below to accept.", s.appName(), roleSuffix(role)),
+		ActionURL:   inviteURL,
+		ActionLabel: "Accept invitation",
+		Note:        "If you were not expecting this invitation, you can ignore this email.",
+	})
+	return s.send(to, fmt.Sprintf("You're invited to %s", s.appName()), htmlBody, textBody)
+}
+
+func roleSuffix(role string) string {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return ""
+	}
+	return " as " + role
+}
+
 func (s *EmailService) appName() string {
 	if s.cfg.AppName != "" {
 		return s.cfg.AppName
@@ -66,7 +87,7 @@ func (s *EmailService) appName() string {
 	if s.pages.AppName != "" {
 		return s.pages.AppName
 	}
-	return "Sydek Auth"
+	return "Auth"
 }
 
 func (s *EmailService) BuildResetURL(token string) string {

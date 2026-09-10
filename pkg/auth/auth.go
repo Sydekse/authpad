@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/Sydekse/authpad/internal/server"
 	"github.com/go-chi/chi/v5"
@@ -80,9 +81,16 @@ func Migrate(ctx context.Context, authURL, idpURL string) error {
 }
 
 func runMigrations(dbURL string, migrationFS fs.FS) error {
+	return runMigrationsTable(dbURL, migrationFS, "")
+}
+
+func runMigrationsTable(dbURL string, migrationFS fs.FS, table string) error {
 	source, err := iofs.New(migrationFS, ".")
 	if err != nil {
 		return err
+	}
+	if table != "" {
+		dbURL = WithMigrationsTable(dbURL, table)
 	}
 	m, err := migrate.NewWithSourceInstance("iofs", source, dbURL)
 	if err != nil {
@@ -91,6 +99,52 @@ func runMigrations(dbURL string, migrationFS fs.FS) error {
 	defer m.Close()
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return err
+	}
+	return nil
+}
+
+// MigrationOptions selects dedicated golang-migrate version tables so auth and
+// IdP ledgers can share one physical database.
+type MigrationOptions struct {
+	AuthTable string
+	IdPTable  string
+}
+
+// WithMigrationsTable appends x-migrations-table to a Postgres DSN.
+func WithMigrationsTable(dsn, table string) string {
+	dsn = strings.TrimSpace(dsn)
+	table = strings.TrimSpace(table)
+	if dsn == "" || table == "" {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "x-migrations-table=" + table
+}
+
+// MigrateWithOptions runs embedded SQL migrations with optional table names.
+func MigrateWithOptions(ctx context.Context, authURL, idpURL string, opts MigrationOptions) error {
+	if authURL != "" {
+		sub, err := fs.Sub(authMigrations, "migrations/auth")
+		if err != nil {
+			return err
+		}
+		if err := runMigrationsTable(authURL, sub, opts.AuthTable); err != nil {
+			return fmt.Errorf("auth migrations: %w", err)
+		}
+		log.Info().Msg("auth database migrations applied")
+	}
+	if idpURL != "" {
+		sub, err := fs.Sub(idpMigrations, "migrations/idp")
+		if err != nil {
+			return err
+		}
+		if err := runMigrationsTable(idpURL, sub, opts.IdPTable); err != nil {
+			return fmt.Errorf("idp migrations: %w", err)
+		}
+		log.Info().Msg("idp database migrations applied")
 	}
 	return nil
 }

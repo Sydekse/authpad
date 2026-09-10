@@ -39,6 +39,8 @@ type Session struct {
 	ExpiresAt    time.Time  `json:"expires_at"`
 	LastActiveAt time.Time  `json:"last_active_at"`
 	Revoked      bool       `json:"revoked"`
+	MFAPending   bool       `json:"mfa_pending,omitempty"`
+	ActiveOrganizationID *uuid.UUID `json:"active_organization_id,omitempty"`
 }
 
 // OAuthAccount is a linked OAuth provider account (Auth DB).

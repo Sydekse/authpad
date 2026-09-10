@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
-	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -42,6 +42,13 @@ func (h *AdminHandlers) AssignRole(w http.ResponseWriter, r *http.Request) {
 		apierror.BadRequest(w, "INVALID_ROLE", "Role is not allowed")
 		return
 	}
+	actor, _ := isAdmin(r, h.Cfg, h.Auth, h.IdP)
+	if h.Cfg.Hooks.AssignmentPolicy != nil {
+		if err := h.Cfg.Hooks.AssignmentPolicy(r.Context(), actor, userID, role, "assign"); err != nil {
+			apierror.Forbidden(w, "FORBIDDEN", err.Error())
+			return
+		}
+	}
 	if err := h.IdP.AssignRoleByName(r.Context(), userID, role); err != nil {
 		apierror.Internal(w, "ASSIGN_ROLE_FAILED", "Could not assign role")
 		return
@@ -66,6 +73,13 @@ func (h *AdminHandlers) RevokeRole(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apierror.BadRequest(w, "INVALID_ID", "Invalid user ID")
 		return
+	}
+	actor, _ := isAdmin(r, h.Cfg, h.Auth, h.IdP)
+	if h.Cfg.Hooks.AssignmentPolicy != nil {
+		if err := h.Cfg.Hooks.AssignmentPolicy(r.Context(), actor, userID, strings.ToLower(body.Role), "revoke"); err != nil {
+			apierror.Forbidden(w, "FORBIDDEN", err.Error())
+			return
+		}
 	}
 	if err := h.IdP.RevokeRoleByName(r.Context(), userID, strings.ToLower(body.Role)); err != nil {
 		apierror.Internal(w, "REVOKE_ROLE_FAILED", "Could not revoke role")
@@ -168,4 +182,45 @@ func (h *AdminHandlers) GetAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
+}
+
+func (h *AdminHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
+	if _, ok := isAdmin(r, h.Cfg, h.Auth, h.IdP); !ok {
+		apierror.Forbidden(w, "FORBIDDEN", "Admin role required")
+		return
+	}
+	roles, err := h.IdP.ListRoles(r.Context())
+	if err != nil {
+		apierror.Internal(w, "LIST_ROLES_FAILED", "Could not list roles")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+}
+
+func (h *AdminHandlers) CreateRole(w http.ResponseWriter, r *http.Request) {
+	actor, ok := isAdmin(r, h.Cfg, h.Auth, h.IdP)
+	if !ok {
+		apierror.Forbidden(w, "FORBIDDEN", "Admin role required")
+		return
+	}
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
+		return
+	}
+	if h.Cfg.Hooks.AssignmentPolicy != nil {
+		if err := h.Cfg.Hooks.AssignmentPolicy(r.Context(), actor, uuid.Nil, strings.TrimSpace(strings.ToLower(body.Name)), "create_role"); err != nil {
+			apierror.Forbidden(w, "FORBIDDEN", err.Error())
+			return
+		}
+	}
+	role, err := h.IdP.CreateRole(r.Context(), body.Name, body.Description)
+	if err != nil {
+		apierror.BadRequest(w, "CREATE_ROLE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, role)
 }

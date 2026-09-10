@@ -14,9 +14,11 @@ import (
 var ErrEmailTaken = errors.New("email already taken")
 
 type CreateAccountRequest struct {
-	Email    string
-	Password string
-	Profile  map[string]any
+	Email         string
+	Password      string
+	Profile       map[string]any
+	EmailVerified bool
+	SkipSession   bool
 }
 
 type CreateAccountResult struct {
@@ -89,20 +91,36 @@ func (s *AccountService) CreateAccount(ctx context.Context, req CreateAccountReq
 		}
 	}
 
-	token, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
-	if err != nil {
-		if s.idpSvc != nil {
-			_ = s.idpSvc.RollbackProfile(ctx, userID)
+	if req.EmailVerified {
+		_ = s.authSvc.MarkEmailVerified(ctx, userID)
+	}
+
+	var token string
+	var sessID uuid.UUID
+	var expiresAt string
+	if !req.SkipSession {
+		tok, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
+		if err != nil {
+			if s.idpSvc != nil {
+				_ = s.idpSvc.RollbackProfile(ctx, userID)
+			}
+			s.authSvc.RollbackUser(ctx, userID)
+			return nil, err
 		}
-		s.authSvc.RollbackUser(ctx, userID)
-		return nil, err
+		token, sessID, expiresAt = tok, sess.ID, sess.ExpiresAt.Format(time.RFC3339)
 	}
 
 	if s.auditSvc != nil {
 		s.auditSvc.LogAuth(ctx, &userID, "account.created", ipAddress, userAgent, map[string]any{"email": req.Email})
 	}
 	if s.hooks.OnSignup != nil {
-		_ = s.hooks.OnSignup(ctx, userID, req.Email)
+		if err := s.hooks.OnSignup(ctx, userID, req.Email); err != nil {
+			if s.idpSvc != nil {
+				_ = s.idpSvc.RollbackProfile(ctx, userID)
+			}
+			s.authSvc.RollbackUser(ctx, userID)
+			return nil, err
+		}
 	}
 
 	return &CreateAccountResult{
@@ -110,8 +128,8 @@ func (s *AccountService) CreateAccount(ctx context.Context, req CreateAccountReq
 		Email:     req.Email,
 		Name:      profile.Name,
 		Token:     token,
-		SessionID: sess.ID,
-		ExpiresAt: sess.ExpiresAt.Format(time.RFC3339),
+		SessionID: sessID,
+		ExpiresAt: expiresAt,
 	}, nil
 }
 

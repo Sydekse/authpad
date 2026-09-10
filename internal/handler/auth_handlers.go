@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -17,16 +18,21 @@ type AuthHandlers struct {
 	Account *service.AccountService
 	Auth    *service.AuthService
 	IdP     *service.IdPService
+	MFA     *service.MFAService
 	Email   *service.EmailService
 	Audit   *service.AuditService
+	Orgs    *service.OrgService
 	Cfg     *apptypes.AppConfig
 }
 
 type signupRequest struct {
-	Email    string         `json:"email"`
-	Password string         `json:"password"`
-	Name     string         `json:"name"`
-	Profile  map[string]any `json:"profile"`
+	Email            string         `json:"email"`
+	Password         string         `json:"password"`
+	Name             string         `json:"name"`
+	Profile          map[string]any `json:"profile"`
+	OrganizationName string         `json:"organization_name"`
+	OrganizationSlug string         `json:"organization_slug"`
+	OrgInviteToken   string         `json:"org_invite_token"`
 }
 
 type loginRequest struct {
@@ -79,6 +85,26 @@ func (h *AuthHandlers) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var orgPayload map[string]any
+	if h.Orgs != nil && h.Cfg.Tenancy.Enabled {
+		org, orgRole, err := h.Orgs.CompleteOnSignup(r.Context(), result.UserID, req.OrganizationName, req.OrganizationSlug, req.OrgInviteToken)
+		if err != nil {
+			_ = h.Account.DeleteAccount(r.Context(), result.UserID, ip, ua)
+			if errors.Is(err, service.ErrOrgRequired) {
+				apierror.BadRequest(w, "ORG_REQUIRED", "Create or join an organization to finish signup")
+				return
+			}
+			apierror.BadRequest(w, "ORG_FAILED", err.Error())
+			return
+		}
+		if org != nil {
+			if result.SessionID != uuid.Nil {
+				_ = h.Orgs.SwitchActive(r.Context(), result.SessionID, result.UserID, org.ID)
+			}
+			orgPayload = map[string]any{"id": org.ID.String(), "slug": org.Slug, "name": org.Name, "org_role": orgRole}
+		}
+	}
+
 	if h.Cfg.Email.RequireVerification {
 		if token, err := h.Auth.CreateEmailVerificationToken(r.Context(), result.UserID); err == nil && h.Email != nil {
 			_ = h.Email.SendEmailVerification(result.Email, h.Email.BuildVerifyURL(token))
@@ -91,16 +117,24 @@ func (h *AuthHandlers) Signup(w http.ResponseWriter, r *http.Request) {
 			"ok":                    true,
 			"email":                 result.Email,
 			"requires_verification": true,
+			"organization":          orgPayload,
 		})
 		return
 	}
 
 	setSessionCookie(w, result.Token, h.Cfg)
-	writeJSON(w, http.StatusCreated, SessionResponse{
-		User: UserInfo{ID: result.UserID.String(), Email: result.Email, Name: result.Name},
+	resp := SessionResponse{
+		User:    UserInfo{ID: result.UserID.String(), Email: result.Email, Name: result.Name},
 		Session: SessionInfo{ID: result.SessionID.String(), ExpiresAt: result.ExpiresAt},
-		Token: result.Token,
-	})
+		Token:   result.Token,
+	}
+	if orgPayload != nil {
+		resp.Organization = orgPayload
+		if role, ok := orgPayload["org_role"].(string); ok {
+			resp.OrgRole = role
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
@@ -135,24 +169,45 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.Audit != nil {
-		h.Audit.LogAuth(r.Context(), &user.ID, "login.success", ip, ua, map[string]any{"remember_me": req.RememberMe})
-	}
-	if h.Cfg.Hooks.OnLogin != nil {
-		_ = h.Cfg.Hooks.OnLogin(r.Context(), user.ID)
-	}
-
-	setSessionCookie(w, token, h.Cfg, ttl)
 	name := user.Email
 	if h.IdP != nil {
 		if profile, _ := h.IdP.GetProfile(r.Context(), user.ID); profile != nil {
 			name = profile.Name
 		}
 	}
+
+	if h.MFA != nil {
+		if has, err := h.MFA.UserHasMFA(r.Context(), user.ID); err == nil && has {
+			if err := h.Auth.SetSessionMFAPending(r.Context(), sess.ID, true); err != nil {
+				apierror.Internal(w, "LOGIN_FAILED", "Could not start MFA challenge")
+				return
+			}
+			setSessionCookie(w, token, h.Cfg, ttl)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"mfa_required": true,
+				"token":        token,
+				"user":         UserInfo{ID: user.ID.String(), Email: user.Email, Name: name, EmailVerified: user.EmailVerified},
+			})
+			return
+		}
+	}
+
+	if h.Audit != nil {
+		h.Audit.LogAuth(r.Context(), &user.ID, "login.success", ip, ua, map[string]any{"remember_me": req.RememberMe})
+	}
+	if h.Cfg.Hooks.OnLogin != nil {
+		if err := h.Cfg.Hooks.OnLogin(r.Context(), user.ID); err != nil {
+			_ = h.Auth.RevokeSession(r.Context(), sess.ID)
+			apierror.Internal(w, "LOGIN_HOOK_FAILED", "Login hook failed")
+			return
+		}
+	}
+
+	setSessionCookie(w, token, h.Cfg, ttl)
 	writeJSON(w, http.StatusOK, SessionResponse{
-		User: UserInfo{ID: user.ID.String(), Email: user.Email, Name: name, EmailVerified: user.EmailVerified},
+		User:    UserInfo{ID: user.ID.String(), Email: user.Email, Name: name, EmailVerified: user.EmailVerified},
 		Session: SessionInfo{ID: sess.ID.String(), ExpiresAt: sess.ExpiresAt.Format(time.RFC3339)},
-		Token: token,
+		Token:   token,
 	})
 }
 
@@ -288,11 +343,15 @@ func (h *AuthHandlers) Session(w http.ResponseWriter, r *http.Request) {
 		apierror.UnauthorizedWithRedirect(w, h.Cfg.Pages.SignInURL, r.URL.RequestURI(), "INVALID_SESSION", "Session expired or invalid")
 		return
 	}
+	if sess.MFAPending {
+		apierror.Forbidden(w, "MFA_REQUIRED", "MFA verification required")
+		return
+	}
 	if newToken, _, err := h.Auth.RotateSession(r.Context(), sess); err == nil && newToken != "" {
 		setSessionCookie(w, newToken, h.Cfg)
 		token = newToken
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"valid": true,
 		"user":  map[string]string{"id": sess.UserID.String()},
 		"token": token,
@@ -301,5 +360,16 @@ func (h *AuthHandlers) Session(w http.ResponseWriter, r *http.Request) {
 			"created_at": sess.CreatedAt.Format(time.RFC3339),
 			"expires_at": sess.ExpiresAt.Format(time.RFC3339),
 		},
-	})
+	}
+	if h.Orgs != nil {
+		if payload := h.Orgs.ActivePayload(r.Context(), sess.UserID, sess.ActiveOrganizationID); payload != nil {
+			out["organization"] = payload
+			if role, ok := payload["org_role"].(string); ok {
+				out["org_role"] = role
+			}
+		}
+	} else if sess.ActiveOrganizationID != nil {
+		out["organization"] = map[string]any{"id": sess.ActiveOrganizationID.String()}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

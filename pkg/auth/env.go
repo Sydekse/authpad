@@ -78,6 +78,34 @@ func LoadFromEnv() Config {
 		cfg.Security.ServiceKeys = map[string]string{"default": serviceKey}
 	}
 
+	if redirects := os.Getenv("OAUTH_ALLOWED_REDIRECTS"); redirects != "" {
+		for _, u := range strings.Split(redirects, ",") {
+			u = strings.TrimSpace(u)
+			if u != "" {
+				cfg.OAuth.AllowedRedirects = append(cfg.OAuth.AllowedRedirects, u)
+			}
+		}
+	}
+
+	cfg.DisablePublicSignup = os.Getenv("DISABLE_PUBLIC_SIGNUP") == "true"
+	cfg.Invitations.Enabled = os.Getenv("AUTHPAD_INVITATIONS_ENABLED") == "true"
+	cfg.Invitations.TTL = getEnvDuration("AUTHPAD_INVITE_TTL", 7*24*time.Hour)
+	cfg.Tenancy.Enabled = os.Getenv("AUTHPAD_TENANCY_ENABLED") == "true"
+	cfg.Tenancy.AllowPersonalAccounts = os.Getenv("AUTHPAD_TENANCY_PERSONAL") != "false"
+	cfg.Tenancy.AllowCreateOrganization = os.Getenv("AUTHPAD_TENANCY_CREATE_ORG") != "false"
+	cfg.Tenancy.RequireOnSignup = os.Getenv("AUTHPAD_TENANCY_REQUIRE_ON_SIGNUP") == "true"
+	cfg.Tenancy.MaxMembershipsPerUser = getEnvInt("AUTHPAD_TENANCY_MAX_MEMBERSHIPS", 0)
+	cfg.Tenancy.DefaultOrgRole = getEnv("AUTHPAD_TENANCY_DEFAULT_ORG_ROLE", "member")
+	if keys := os.Getenv("AUTHPAD_TENANCY_ORG_PRIVATE_FIELDS"); keys != "" {
+		for _, k := range strings.Split(keys, ",") {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				cfg.Tenancy.OrgPrivateMetadataKeys = append(cfg.Tenancy.OrgPrivateMetadataKeys, k)
+			}
+		}
+	}
+	cfg.APIBasePath = getEnv("AUTHPAD_API_BASE_PATH", "/api/v1")
+
 	return cfg
 }
 

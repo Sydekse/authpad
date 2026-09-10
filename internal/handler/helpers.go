@@ -15,9 +15,11 @@ import (
 )
 
 type SessionResponse struct {
-	User    UserInfo    `json:"user"`
-	Session SessionInfo `json:"session"`
-	Token   string      `json:"token,omitempty"`
+	User         UserInfo       `json:"user"`
+	Session      SessionInfo    `json:"session"`
+	Token        string         `json:"token,omitempty"`
+	Organization map[string]any `json:"organization,omitempty"`
+	OrgRole      string         `json:"org_role,omitempty"`
 }
 
 type UserInfo struct {
@@ -120,12 +122,49 @@ func requireSession(w http.ResponseWriter, r *http.Request, authSvc *service.Aut
 		apierror.UnauthorizedWithRedirect(w, cfg.Pages.SignInURL, r.URL.RequestURI(), "INVALID_SESSION", "Session expired or invalid")
 		return nil, "", authSvc, false
 	}
+	if sess.MFAPending {
+		apierror.Forbidden(w, "MFA_REQUIRED", "MFA verification required")
+		return nil, "", authSvc, false
+	}
 	if newToken, _, err := authSvc.RotateSession(r.Context(), sess); err == nil && newToken != "" {
 		setSessionCookie(w, newToken, cfg)
 		token = newToken
 	}
 	id := sess.UserID
 	return &id, token, authSvc, true
+}
+
+func requireFullSession(w http.ResponseWriter, r *http.Request, authSvc *service.AuthService, cfg *apptypes.AppConfig) (*uuid.UUID, *uuid.UUID, string, bool) {
+	userID, token, _, ok := requireSession(w, r, authSvc, cfg)
+	if !ok {
+		return nil, nil, "", false
+	}
+	sess, err := authSvc.GetSessionByToken(r.Context(), token)
+	if err != nil || sess == nil {
+		apierror.Unauthorized(w, "INVALID_SESSION", "Session expired or invalid")
+		return nil, nil, "", false
+	}
+	sid := sess.ID
+	return userID, &sid, token, true
+}
+
+func requirePendingMFASession(w http.ResponseWriter, r *http.Request, authSvc *service.AuthService, cfg *apptypes.AppConfig) (*uuid.UUID, *uuid.UUID, string, bool) {
+	token := getSessionToken(r, cfg)
+	if token == "" {
+		apierror.Unauthorized(w, "NO_SESSION", "No session token")
+		return nil, nil, "", false
+	}
+	sess, err := authSvc.GetSessionByToken(r.Context(), token)
+	if err != nil || sess == nil {
+		apierror.Unauthorized(w, "INVALID_SESSION", "Session expired or invalid")
+		return nil, nil, "", false
+	}
+	if !sess.MFAPending {
+		apierror.BadRequest(w, "MFA_NOT_PENDING", "No MFA challenge is pending")
+		return nil, nil, "", false
+	}
+	uid, sid := sess.UserID, sess.ID
+	return &uid, &sid, token, true
 }
 
 func isServiceAuthorized(r *http.Request, cfg *apptypes.AppConfig) bool {
