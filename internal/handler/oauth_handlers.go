@@ -5,10 +5,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/Sydekse/authpad/internal/service"
-	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/security"
+	"github.com/Sydekse/authpad/internal/service"
+	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 )

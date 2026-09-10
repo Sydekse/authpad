@@ -30,16 +30,16 @@ type Credential struct {
 
 // Session is an opaque session (Auth DB).
 type Session struct {
-	ID           uuid.UUID  `json:"id"`
-	UserID       uuid.UUID  `json:"user_id"`
-	TokenHash    string     `json:"-"`
-	IPAddress    string     `json:"ip_address,omitempty"`
-	UserAgent    string     `json:"user_agent,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	LastActiveAt time.Time  `json:"last_active_at"`
-	Revoked      bool       `json:"revoked"`
-	MFAPending   bool       `json:"mfa_pending,omitempty"`
+	ID                   uuid.UUID  `json:"id"`
+	UserID               uuid.UUID  `json:"user_id"`
+	TokenHash            string     `json:"-"`
+	IPAddress            string     `json:"ip_address,omitempty"`
+	UserAgent            string     `json:"user_agent,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            time.Time  `json:"expires_at"`
+	LastActiveAt         time.Time  `json:"last_active_at"`
+	Revoked              bool       `json:"revoked"`
+	MFAPending           bool       `json:"mfa_pending,omitempty"`
 	ActiveOrganizationID *uuid.UUID `json:"active_organization_id,omitempty"`
 }
 

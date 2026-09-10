@@ -11,17 +11,17 @@ import (
 )
 
 type (
-	Config         = apptypes.AppConfig
-	SessionConfig  = apptypes.SessionConfig
-	SecurityConfig = apptypes.SecurityConfig
-	PagesConfig    = apptypes.PagesConfig
-	OAuthConfig    = apptypes.OAuthConfig
-	EmailConfig    = apptypes.EmailConfig
-	RoleDefinition = apptypes.RoleDefinition
-	Hooks          = apptypes.Hooks
-	FieldType      = apptypes.FieldType
-	ProfileField   = apptypes.ProfileField
-	ProfileSchema  = apptypes.ProfileSchema
+	Config           = apptypes.AppConfig
+	SessionConfig    = apptypes.SessionConfig
+	SecurityConfig   = apptypes.SecurityConfig
+	PagesConfig      = apptypes.PagesConfig
+	OAuthConfig      = apptypes.OAuthConfig
+	EmailConfig      = apptypes.EmailConfig
+	RoleDefinition   = apptypes.RoleDefinition
+	Hooks            = apptypes.Hooks
+	FieldType        = apptypes.FieldType
+	ProfileField     = apptypes.ProfileField
+	ProfileSchema    = apptypes.ProfileSchema
 	ProfileInput     = apptypes.ProfileInput
 	InvitationConfig = apptypes.InvitationConfig
 	TenancyConfig    = apptypes.TenancyConfig

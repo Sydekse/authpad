@@ -47,11 +47,11 @@ type UserRole struct {
 
 // UserGroup links a user to a group (IdP DB).
 type UserGroup struct {
-	ID        uuid.UUID  `json:"id"`
-	UserID    uuid.UUID  `json:"user_id"`
-	GroupID   uuid.UUID  `json:"group_id"`
-	JoinedAt  time.Time  `json:"joined_at"`
-	AddedBy   *uuid.UUID `json:"added_by,omitempty"`
+	ID       uuid.UUID  `json:"id"`
+	UserID   uuid.UUID  `json:"user_id"`
+	GroupID  uuid.UUID  `json:"group_id"`
+	JoinedAt time.Time  `json:"joined_at"`
+	AddedBy  *uuid.UUID `json:"added_by,omitempty"`
 }
 
 type Invitation struct {

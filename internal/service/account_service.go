@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
 	"github.com/Sydekse/authpad/internal/apptypes"
+	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
 	"github.com/google/uuid"
 )
 
@@ -31,13 +31,13 @@ type CreateAccountResult struct {
 }
 
 type AccountService struct {
-	authSvc   *AuthService
-	idpSvc    *IdPService
-	userRepo  *auth_repo.UserAuthRepo
-	credRepo  *auth_repo.CredentialRepo
-	auditSvc  *AuditService
-	schema    apptypes.ProfileSchema
-	hooks     apptypes.Hooks
+	authSvc  *AuthService
+	idpSvc   *IdPService
+	userRepo *auth_repo.UserAuthRepo
+	credRepo *auth_repo.CredentialRepo
+	auditSvc *AuditService
+	schema   apptypes.ProfileSchema
+	hooks    apptypes.Hooks
 }
 
 func NewAccountService(
