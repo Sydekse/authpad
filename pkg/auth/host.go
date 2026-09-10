@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -46,7 +47,13 @@ func (a *Auth) IdentityFromRequest(r *http.Request) (*Identity, error) {
 		return nil, nil
 	}
 	sess, err := a.srv.AuthSvc.GetSessionByToken(r.Context(), token)
-	if err != nil || sess == nil {
+	if errors.Is(err, service.ErrSessionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
 		return nil, nil
 	}
 	return &Identity{
@@ -58,18 +65,29 @@ func (a *Auth) IdentityFromRequest(r *http.Request) (*Identity, error) {
 	}, nil
 }
 
+// writeHostError emits the same {"error":{"code","message"}} envelope the
+// mounted handlers use. http.Error is unusable here because it forces
+// Content-Type: text/plain.
+func writeHostError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{"code": code, "message": message},
+	})
+}
+
 func (a *Auth) RequireUser(w http.ResponseWriter, r *http.Request) (*Identity, bool) {
 	id, err := a.IdentityFromRequest(r)
 	if err != nil {
-		http.Error(w, `{"error":{"code":"SESSION_LOOKUP_FAILED","message":"Could not verify session"}}`, http.StatusInternalServerError)
+		writeHostError(w, http.StatusInternalServerError, "SESSION_LOOKUP_FAILED", "Could not verify session")
 		return nil, false
 	}
 	if id == nil || id.UserID == uuid.Nil {
-		http.Error(w, `{"error":{"code":"NO_SESSION","message":"Authentication required"}}`, http.StatusUnauthorized)
+		writeHostError(w, http.StatusUnauthorized, "NO_SESSION", "Authentication required")
 		return nil, false
 	}
 	if id.MFAPending {
-		http.Error(w, `{"error":{"code":"MFA_REQUIRED","message":"MFA verification required"}}`, http.StatusForbidden)
+		writeHostError(w, http.StatusForbidden, "MFA_REQUIRED", "MFA verification required")
 		return nil, false
 	}
 	return id, true
