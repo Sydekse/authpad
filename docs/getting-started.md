@@ -5,7 +5,7 @@ authpad is an embeddable Go authentication library (better-auth-style) with opti
 ## Install
 
 ```bash
-go get github.com/auth-project/authpad
+go get github.com/Sydekse/authpad
 ```
 
 ## Quick start
@@ -83,3 +83,29 @@ Signup body:
 ```
 
 Custom fields are stored in `users_profile.metadata` JSONB and validated at runtime.
+
+## Optional company tenancy
+
+```go
+cfg.Tenancy.Enabled = true
+cfg.Tenancy.AllowCreateOrganization = true
+cfg.Tenancy.AllowPersonalAccounts = true
+cfg.Tenancy.MaxMembershipsPerUser = 0 // unlimited; use 1 for single-home
+```
+
+Mounted when enabled: `POST/GET /organizations`, org members/invites, `POST /session/organization`.
+
+Company-mode signup (`RequireOnSignup`) must create an organization (`organization_name`) or accept `org_invite_token`. Session and `/account` include `organization` and `org_role` when an org is active.
+
+Hosts that already register overlapping routes should set `cfg.SkipHTTPPaths` (for example `"/admin/roles"`) instead of depending on chi match order.
+
+## Replacing public signup
+
+```go
+cfg.DisablePublicSignup = true
+r.Post("/api/v1/auth/signup", mySignup)
+a.Mount(r, "/api/v1")
+```
+
+Use `a.CreateAccount` and `a.AssignRole` in `mySignup`.
+

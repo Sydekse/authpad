@@ -1,62 +1,63 @@
 # authpad
 
-Embeddable Go authentication library with optional internal IdP (profiles, roles, groups). Inspired by [better-auth](https://www.better-auth.com/) — configure schema, roles, and hosted pages; mount on your existing chi router.
+Embeddable Go authentication library with optional IdP (profiles, roles, groups) and an opt-in company tenancy module.
 
 ## Features
 
-- Email/password auth, sessions (cookie + Bearer), OAuth (Google/GitHub)
-- Developer-defined profile schema (custom fields in JSONB metadata)
-- Configurable roles seeded at startup
-- Hosted-page redirect model (no bundled UI required)
-- Audit logs, email verification, session hardening, MFA (TOTP/WebAuthn), GDPR delete/export
-- Embedded migrations via golang-migrate
+- Email/password auth, opaque sessions (cookie + Bearer), OAuth (Google/GitHub)
+- Developer-defined profile schema and seeded roles
+- Hosted-page redirect model (no bundled UI)
+- Audit logs, email verification, CSRF, rate limits, TOTP MFA
+- Optional invitations and workspace-style organizations
+- Embedded PostgreSQL migrations
 
-## Project layout
+## Install
 
-```
-auth-api/
-├── pkg/auth/           # Public library API
-├── internal/           # Handlers, services, repos
-├── cmd/example/        # Reference HTTP server
-├── cmd/migrate/        # Migration CLI
-├── examples/
-│   ├── embed-chi/      # Minimal integration
-│   └── nextjs-hosted-pages/  # Reference Next.js UI
-└── docs/
+```bash
+go get github.com/Sydekse/authpad
 ```
 
 ## Quick start
 
-```bash
-cp .env .env.local   # configure AUTH_DATABASE_URL, IDP_DATABASE_URL
-go run ./cmd/migrate
-go run ./cmd/example
+```go
+import "github.com/Sydekse/authpad/pkg/auth"
+
+cfg := auth.LoadFromEnv()
+cfg.OAuth.AllowedRedirects = []string{"https://app.example.com/callback"}
+if err := auth.Migrate(ctx, cfg.AuthDatabaseURL, cfg.IdPDatabaseURL); err != nil {
+    log.Fatal(err)
+}
+a, err := auth.New(cfg)
+if err != nil { log.Fatal(err) }
+defer a.Close()
+
+r := chi.NewRouter()
+r.Use(auth.CORS(cfg.AllowedOrigins))
+a.Mount(r, "/api/v1")
 ```
 
-## Library usage
+Same-database auth + IdP ledgers:
 
 ```go
-import "github.com/auth-project/authpad/pkg/auth"
-
-cfg := auth.DefaultConfig()
-cfg.AuthDatabaseURL = os.Getenv("AUTH_DATABASE_URL")
-cfg.IdPDatabaseURL = os.Getenv("IDP_DATABASE_URL")
-cfg.Roles = []auth.RoleDefinition{{Name: "admin"}, {Name: "member"}}
-cfg.Pages.SignInURL = "https://app.example.com/signin"
-
-a, _ := auth.New(cfg)
-defer a.Close()
-a.Mount(router, "/api/v1")
+err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
+    AuthTable: "schema_migrations_auth",
+    IdPTable:  "schema_migrations_idp",
+})
 ```
 
-See [docs/getting-started.md](docs/getting-started.md) for full documentation.
+## Company tenancy
 
-## Architecture
+Off by default. Enable with `AUTHPAD_TENANCY_ENABLED=true` or `cfg.Tenancy.Enabled = true` (requires IdP). Users can belong to many organizations, switch `active_organization_id` on the session, and hold org-scoped roles (`owner`, `admin`, `member`). Set `MaxMembershipsPerUser: 1` for single-home products.
 
-- **Auth DB** — credentials, sessions, OAuth, MFA, audit
-- **IdP DB** (optional) — profiles, roles, groups
+## Invitations
 
-Account operations coordinate across both databases with compensating rollback on failure.
+Enable with `AUTHPAD_INVITATIONS_ENABLED=true`. Hosts that already implement invites (for example Sydek auth-service) should leave this off.
+
+## Host API
+
+Wrappers should use `IdentityFromRequest`, `CreateAccount`, `AssignRole`, `SetSessionCookie`, `CSRF`, and `HashToken` instead of copying internals. Overlapping host routes should be listed in `SkipHTTPPaths`.
+
+See [docs/getting-started.md](docs/getting-started.md).
 
 ## License
 
