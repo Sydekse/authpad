@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/domain/idp"
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
-	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -19,25 +19,30 @@ type IdPHandlers struct {
 	IdP     *service.IdPService
 	Account *service.AccountService
 	Audit   *service.AuditService
+	Orgs    *service.OrgService
 	Cfg     *apptypes.AppConfig
 }
 
 type UserInfoResponse struct {
-	Valid   bool         `json:"valid"`
-	User    *UserInfo    `json:"user,omitempty"`
-	Roles   []string     `json:"roles,omitempty"`
-	Groups  []idp.Group  `json:"groups,omitempty"`
-	Session *SessionInfo `json:"session,omitempty"`
+	Valid        bool           `json:"valid"`
+	User         *UserInfo      `json:"user,omitempty"`
+	Roles        []string       `json:"roles,omitempty"`
+	Groups       []idp.Group    `json:"groups,omitempty"`
+	Session      *SessionInfo   `json:"session,omitempty"`
+	Organization map[string]any `json:"organization,omitempty"`
+	OrgRole      string         `json:"org_role,omitempty"`
 }
 
 type AccountResponse struct {
-	UserID   string         `json:"user_id"`
-	Email    string         `json:"email"`
-	Name     string         `json:"name"`
-	ImageURL string         `json:"image_url,omitempty"`
-	Bio      string         `json:"bio,omitempty"`
-	Roles    []string       `json:"roles"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	UserID       string         `json:"user_id"`
+	Email        string         `json:"email"`
+	Name         string         `json:"name"`
+	ImageURL     string         `json:"image_url,omitempty"`
+	Bio          string         `json:"bio,omitempty"`
+	Roles        []string       `json:"roles"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	Organization map[string]any `json:"organization,omitempty"`
+	OrgRole      string         `json:"org_role,omitempty"`
 }
 
 func (h *IdPHandlers) Userinfo(w http.ResponseWriter, r *http.Request) {
@@ -68,11 +73,20 @@ func (h *IdPHandlers) writeUserInfo(w http.ResponseWriter, r *http.Request, user
 	if sess != nil {
 		sessionInfo = &SessionInfo{ID: sess.ID.String(), ExpiresAt: sess.ExpiresAt.Format(time.RFC3339)}
 	}
-	writeJSON(w, http.StatusOK, UserInfoResponse{
+	resp := UserInfoResponse{
 		Valid: true,
 		User:  &UserInfo{ID: userID.String(), Email: email, Name: profile.Name, EmailVerified: verified},
 		Roles: roles, Groups: groups, Session: sessionInfo,
-	})
+	}
+	if h.Orgs != nil && sess != nil {
+		if payload := h.Orgs.ActivePayload(r.Context(), userID, sess.ActiveOrganizationID); payload != nil {
+			resp.Organization = payload
+			if role, ok := payload["org_role"].(string); ok {
+				resp.OrgRole = role
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *IdPHandlers) GetUserByID(w http.ResponseWriter, r *http.Request) {
@@ -151,9 +165,25 @@ func (h *IdPHandlers) GetAccount(w http.ResponseWriter, r *http.Request) {
 	roles, _ := h.IdP.GetRoleNames(r.Context(), *userID)
 	var metadata map[string]any
 	_ = json.Unmarshal(profile.Metadata, &metadata)
-	writeJSON(w, http.StatusOK, AccountResponse{
+	token := getSessionToken(r, h.Cfg)
+	sess, _ := h.Auth.GetSessionByToken(r.Context(), token)
+	var orgPayload map[string]any
+	hasActiveOrg := false
+	if h.Orgs != nil && sess != nil {
+		orgPayload = h.Orgs.ActivePayload(r.Context(), *userID, sess.ActiveOrganizationID)
+		hasActiveOrg = orgPayload != nil
+	}
+	metadata = service.FilterOrgPrivateMetadata(h.Cfg, metadata, hasActiveOrg)
+	resp := AccountResponse{
 		UserID: userID.String(), Email: email, Name: profile.Name, ImageURL: profile.ImageURL, Bio: profile.Bio, Roles: roles, Metadata: metadata,
-	})
+		Organization: orgPayload,
+	}
+	if orgPayload != nil {
+		if role, ok := orgPayload["org_role"].(string); ok {
+			resp.OrgRole = role
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *IdPHandlers) GetAccountComplete(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +192,16 @@ func (h *IdPHandlers) GetAccountComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	roles, _ := h.IdP.GetRoleNames(r.Context(), *userID)
-	writeJSON(w, http.StatusOK, map[string]bool{"complete": len(roles) > 0})
+	complete := len(roles) > 0
+	if h.Cfg.Tenancy.Enabled && h.Cfg.Tenancy.RequireOnSignup && h.Orgs != nil {
+		hasOrg, err := h.Orgs.HasMembership(r.Context(), *userID)
+		if err != nil {
+			apierror.Internal(w, "ACCOUNT_COMPLETE_FAILED", "Could not check organization membership")
+			return
+		}
+		complete = complete && hasOrg
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"complete": complete})
 }
 
 func (h *IdPHandlers) PatchAccount(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +273,22 @@ func (h *IdPHandlers) AssignRole(w http.ResponseWriter, r *http.Request) {
 	if !h.IdP.IsAllowedRole(role) {
 		apierror.BadRequest(w, "INVALID_ROLE", "Role is not allowed")
 		return
+	}
+	if strings.EqualFold(role, h.Cfg.Security.AdminRoleName) {
+		apierror.Forbidden(w, "ROLE_NOT_SELF_ASSIGNABLE", "Cannot self-assign the admin role")
+		return
+	}
+	for _, locked := range h.Cfg.InviteOnlyRoles {
+		if strings.EqualFold(role, locked) {
+			apierror.Forbidden(w, "ROLE_NOT_SELF_ASSIGNABLE", "This role cannot be self-assigned")
+			return
+		}
+	}
+	if h.Cfg.Hooks.AssignmentPolicy != nil {
+		if err := h.Cfg.Hooks.AssignmentPolicy(r.Context(), *userID, *userID, role, "self_assign"); err != nil {
+			apierror.Forbidden(w, "ROLE_NOT_SELF_ASSIGNABLE", err.Error())
+			return
+		}
 	}
 	if err := h.IdP.AssignRoleByName(r.Context(), *userID, role); err != nil {
 		apierror.Internal(w, "ASSIGN_ROLE_FAILED", "Could not assign role")
@@ -325,14 +380,17 @@ func (h *IdPHandlers) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.Cfg.Hooks.OnDelete != nil {
+		if err := h.Cfg.Hooks.OnDelete(r.Context(), *userID); err != nil {
+			apierror.Internal(w, "DELETE_HOOK_FAILED", "Delete hook failed")
+			return
+		}
+	}
 	ip := parseIPFromRemote(r)
 	ua := r.Header.Get("User-Agent")
 	if err := h.Account.DeleteAccount(r.Context(), *userID, ip, ua); err != nil {
 		apierror.Internal(w, "DELETE_FAILED", "Could not delete account")
 		return
-	}
-	if h.Cfg.Hooks.OnDelete != nil {
-		_ = h.Cfg.Hooks.OnDelete(r.Context(), *userID)
 	}
 	clearSessionCookie(w, h.Cfg)
 	w.WriteHeader(http.StatusNoContent)

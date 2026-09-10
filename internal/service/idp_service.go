@@ -75,6 +75,18 @@ func (s *IdPService) IsAllowedRole(name string) bool {
 	return false
 }
 
+func (s *IdPService) ListRoles(ctx context.Context) ([]idp.Role, error) {
+	return s.roleRepo.List(ctx)
+}
+
+func (s *IdPService) CreateRole(ctx context.Context, name, description string) (*idp.Role, error) {
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return nil, fmt.Errorf("role name is required")
+	}
+	return s.roleRepo.Create(ctx, name, description)
+}
+
 func (s *IdPService) CreateProfile(ctx context.Context, userID uuid.UUID, profile apptypes.ProfileInput) error {
 	now := time.Now()
 	metadata, _ := json.Marshal(profile.Metadata)

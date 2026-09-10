@@ -8,6 +8,7 @@ import (
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/Sydekse/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/security"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 )
@@ -30,11 +31,12 @@ func (h *OAuthHandlers) OAuthInit(w http.ResponseWriter, r *http.Request) {
 	if redirectURI == "" {
 		redirectURI = h.Cfg.Pages.CallbackURL
 	}
-	if redirectURI == "" {
-		redirectURI = "/"
+	if !security.RedirectAllowed(h.Cfg, redirectURI) {
+		apierror.BadRequest(w, "INVALID_REDIRECT", "Redirect URI is not allowed")
+		return
 	}
 	callbackBaseURL := getCallbackBaseURL(r)
-	authURL, _, err := h.OAuth.AuthURL(provider, redirectURI, callbackBaseURL)
+	authURL, _, err := h.OAuth.AuthURL(r.Context(), provider, redirectURI, callbackBaseURL)
 	if err != nil {
 		log.Warn().Err(err).Str("provider", provider).Msg("oauth init")
 		apierror.BadRequest(w, "OAUTH_CONFIG", "OAuth is not configured for this provider")
@@ -70,18 +72,15 @@ func (h *OAuthHandlers) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	setSessionCookie(w, result.Token, h.Cfg)
 	finalRedirect := redirectURI
-	if result.Token != "" {
-		if u, err := url.Parse(strings.TrimSpace(redirectURI)); err == nil && u.Scheme != "" && u.Host != "" {
-			q := u.Query()
-			q.Set("token", result.Token)
-			u.RawQuery = q.Encode()
-			finalRedirect = u.String()
-		} else if h.Cfg.Pages.CallbackURL != "" {
-			u, _ := url.Parse(h.Cfg.Pages.CallbackURL)
-			q := u.Query()
-			q.Set("token", result.Token)
-			u.RawQuery = q.Encode()
-			finalRedirect = u.String()
+	if result.MFARequired {
+		if h.Cfg.Pages.SignInURL != "" {
+			u, err := url.Parse(h.Cfg.Pages.SignInURL)
+			if err == nil {
+				q := u.Query()
+				q.Set("mfa_required", "1")
+				u.RawQuery = q.Encode()
+				finalRedirect = u.String()
+			}
 		}
 	}
 	http.Redirect(w, r, finalRedirect, http.StatusFound)

@@ -2,10 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +13,7 @@ import (
 	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/domain/auth"
 	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
+	"github.com/Sydekse/authpad/internal/security"
 	"github.com/google/uuid"
 )
 
@@ -40,56 +37,53 @@ type OAuthService struct {
 	cfg        *apptypes.AppConfig
 	authSvc    *AuthService
 	idpSvc     *IdPService
+	mfaSvc     *MFAService
 	userRepo   *auth_repo.UserAuthRepo
 	oauthRepo  *auth_repo.OAuthAccountRepo
+	stateRepo  *auth_repo.OAuthStateRepo
 	auditSvc   *AuditService
+	orgSvc     *OrgService
 	httpClient *http.Client
 }
 
-func NewOAuthService(cfg *apptypes.AppConfig, authSvc *AuthService, idpSvc *IdPService, userRepo *auth_repo.UserAuthRepo, oauthRepo *auth_repo.OAuthAccountRepo, auditSvc *AuditService) *OAuthService {
+func NewOAuthService(cfg *apptypes.AppConfig, authSvc *AuthService, idpSvc *IdPService, mfaSvc *MFAService, userRepo *auth_repo.UserAuthRepo, oauthRepo *auth_repo.OAuthAccountRepo, stateRepo *auth_repo.OAuthStateRepo, auditSvc *AuditService, orgSvc *OrgService) *OAuthService {
 	return &OAuthService{
 		cfg:        cfg,
 		authSvc:    authSvc,
 		idpSvc:     idpSvc,
+		mfaSvc:     mfaSvc,
 		userRepo:   userRepo,
 		oauthRepo:  oauthRepo,
+		stateRepo:  stateRepo,
 		auditSvc:   auditSvc,
+		orgSvc:     orgSvc,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-// state = base64(redirectURI) + "." + hex(hmac(redirectURI))
-func (s *OAuthService) signState(redirectURI string) string {
-	b := base64.URLEncoding.EncodeToString([]byte(redirectURI))
-	mac := hmac.New(sha256.New, []byte(s.cfg.Security.SessionSecret))
-	mac.Write([]byte(b))
-	return b + "." + hex.EncodeToString(mac.Sum(nil))
-}
-
-func (s *OAuthService) verifyState(state string) (redirectURI string, ok bool) {
-	state = strings.TrimSpace(state)
-	parts := strings.SplitN(state, ".", 2)
-	if len(parts) != 2 {
-		return "", false
+func (s *OAuthService) providerCallbackURL(callbackBaseURL, provider string) string {
+	base := strings.TrimSuffix(callbackBaseURL, "/")
+	api := strings.TrimSuffix(s.cfg.APIBasePath, "/")
+	if api == "" {
+		api = "/api/v1"
 	}
-	parts[0] = strings.TrimSpace(parts[0])
-	parts[1] = strings.TrimSpace(parts[1])
-	b, err := base64.URLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return "", false
+	if !strings.HasPrefix(api, "/") {
+		api = "/" + api
 	}
-	redirectURI = strings.TrimSpace(string(b))
-	mac := hmac.New(sha256.New, []byte(s.cfg.Security.SessionSecret))
-	mac.Write([]byte(parts[0]))
-	expected := hex.EncodeToString(mac.Sum(nil))
-	return redirectURI, hmac.Equal([]byte(parts[1]), []byte(expected))
+	return base + api + "/auth/oauth/" + provider + "/callback"
 }
 
 // AuthURL returns the provider authorization URL and state for the given redirect_uri (frontend URL).
-func (s *OAuthService) AuthURL(provider, redirectURI, callbackBaseURL string) (authURL string, state string, err error) {
+func (s *OAuthService) AuthURL(ctx context.Context, provider, redirectURI, callbackBaseURL string) (authURL string, state string, err error) {
 	redirectURI = strings.TrimSpace(redirectURI)
-	state = s.signState(redirectURI)
-	callbackURL := callbackBaseURL + "/api/v1/auth/oauth/" + provider + "/callback"
+	if !security.RedirectAllowed(s.cfg, redirectURI) {
+		return "", "", fmt.Errorf("redirect uri is not allowed")
+	}
+	state, err = s.stateRepo.Create(ctx, redirectURI, 10*time.Minute)
+	if err != nil {
+		return "", "", err
+	}
+	callbackURL := s.providerCallbackURL(callbackBaseURL, provider)
 
 	switch provider {
 	case ProviderGoogle:
@@ -124,18 +118,46 @@ func (s *OAuthService) AuthURL(provider, redirectURI, callbackBaseURL string) (a
 
 // TokenAndUser holds session result for OAuth callback.
 type TokenAndUser struct {
-	Token     string
-	SessionID uuid.UUID
-	ExpiresAt time.Time
+	Token       string
+	SessionID   uuid.UUID
+	ExpiresAt   time.Time
+	MFARequired bool
+}
+
+func (s *OAuthService) finishSession(ctx context.Context, userID uuid.UUID, ipAddress, userAgent string) (*TokenAndUser, error) {
+	token, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
+	if err != nil {
+		return nil, err
+	}
+	out := &TokenAndUser{Token: token, SessionID: sess.ID, ExpiresAt: sess.ExpiresAt}
+	if s.mfaSvc != nil {
+		if has, err := s.mfaSvc.UserHasMFA(ctx, userID); err == nil && has {
+			if err := s.authSvc.SetSessionMFAPending(ctx, sess.ID, true); err != nil {
+				return nil, err
+			}
+			out.MFARequired = true
+			return out, nil
+		}
+	}
+	if s.cfg.Hooks.OnLogin != nil && !out.MFARequired {
+		if err := s.cfg.Hooks.OnLogin(ctx, userID); err != nil {
+			_ = s.authSvc.RevokeSession(ctx, sess.ID)
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Callback exchanges code for token, fetches provider user, creates or links account, creates session.
 func (s *OAuthService) Callback(ctx context.Context, provider, code, state, callbackBaseURL, ipAddress, userAgent string) (redirectURI string, result *TokenAndUser, err error) {
-	redirectURI, ok := s.verifyState(state)
+	redirectURI, ok := s.stateRepo.Consume(ctx, state)
 	if !ok {
 		return "", nil, fmt.Errorf("invalid state")
 	}
-	callbackURL := callbackBaseURL + "/api/v1/auth/oauth/" + provider + "/callback"
+	if !security.RedirectAllowed(s.cfg, redirectURI) {
+		return "", nil, fmt.Errorf("redirect uri is not allowed")
+	}
+	callbackURL := s.providerCallbackURL(callbackBaseURL, provider)
 
 	var accessToken string
 	var providerUserID, email, name, imageURL string
@@ -181,11 +203,11 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 				}
 			}
 		}
-		token, sess, err := s.authSvc.CreateSession(ctx, existing.UserID, ipAddress, userAgent)
+		result, err := s.finishSession(ctx, existing.UserID, ipAddress, userAgent)
 		if err != nil {
 			return redirectURI, nil, err
 		}
-		return redirectURI, &TokenAndUser{Token: token, SessionID: sess.ID, ExpiresAt: sess.ExpiresAt}, nil
+		return redirectURI, result, nil
 	}
 
 	// Find existing user by email and link
@@ -226,11 +248,11 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 		if !user.EmailVerified {
 			_ = s.authSvc.MarkEmailVerified(ctx, user.ID)
 		}
-		token, sess, err := s.authSvc.CreateSession(ctx, user.ID, ipAddress, userAgent)
+		result, err := s.finishSession(ctx, user.ID, ipAddress, userAgent)
 		if err != nil {
 			return redirectURI, nil, err
 		}
-		return redirectURI, &TokenAndUser{Token: token, SessionID: sess.ID, ExpiresAt: sess.ExpiresAt}, nil
+		return redirectURI, result, nil
 	}
 
 	// Create new user + profile + oauth link + session
@@ -267,11 +289,32 @@ func (s *OAuthService) Callback(ctx context.Context, provider, code, state, call
 			return redirectURI, nil, err
 		}
 	}
-	token, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
+	result, err = s.finishSession(ctx, userID, ipAddress, userAgent)
 	if err != nil {
 		return redirectURI, nil, err
 	}
-	return redirectURI, &TokenAndUser{Token: token, SessionID: sess.ID, ExpiresAt: sess.ExpiresAt}, nil
+	if err := s.completeTenancy(ctx, userID, name, email, result); err != nil {
+		return redirectURI, nil, err
+	}
+	return redirectURI, result, nil
+}
+
+func (s *OAuthService) completeTenancy(ctx context.Context, userID uuid.UUID, name, email string, result *TokenAndUser) error {
+	if s.orgSvc == nil || s.cfg == nil || !s.cfg.Tenancy.Enabled || !s.cfg.Tenancy.RequireOnSignup {
+		return nil
+	}
+	orgName := strings.TrimSpace(name)
+	if orgName == "" {
+		orgName = strings.TrimSpace(email)
+	}
+	org, _, err := s.orgSvc.CompleteOnSignup(ctx, userID, orgName, "", "")
+	if err != nil {
+		return err
+	}
+	if org != nil && result != nil {
+		return s.orgSvc.SwitchActive(ctx, result.SessionID, userID, org.ID)
+	}
+	return nil
 }
 
 func (s *OAuthService) exchangeGoogle(ctx context.Context, code, callbackURL string) (string, error) {
@@ -366,11 +409,11 @@ func (s *OAuthService) fetchGitHubUser(ctx context.Context, accessToken string) 
 		return "", "", "", "", fmt.Errorf("github user: %s", string(body))
 	}
 	var u struct {
-		ID      int    `json:"id"`
-		Login   string `json:"login"`
-		Name    string `json:"name"`
-		Email   string `json:"email"`
-		Avatar  string `json:"avatar_url"`
+		ID     int    `json:"id"`
+		Login  string `json:"login"`
+		Name   string `json:"name"`
+		Email  string `json:"email"`
+		Avatar string `json:"avatar_url"`
 	}
 	if err := json.Unmarshal(body, &u); err != nil {
 		return "", "", "", "", err

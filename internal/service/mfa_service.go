@@ -158,6 +158,38 @@ func RandomChallenge() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+func (s *MFAService) VerifyLoginCode(ctx context.Context, userID uuid.UUID, factorID *uuid.UUID, code string) error {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ErrMFAInvalid
+	}
+	if factorID != nil && *factorID != uuid.Nil {
+		if err := s.VerifyTOTP(ctx, userID, *factorID, code); err == nil {
+			return nil
+		}
+	} else {
+		factors, err := s.factorRepo.ListByUserID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		for _, f := range factors {
+			if f.Verified && f.FactorType == "totp" {
+				if totp.Validate(code, f.SecretEnc) {
+					return nil
+				}
+			}
+		}
+	}
+	ok, err := s.UseRecoveryCode(ctx, userID, code)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	return ErrMFAInvalid
+}
+
 func (s *MFAService) UserHasMFA(ctx context.Context, userID uuid.UUID) (bool, error) {
 	factors, err := s.factorRepo.ListByUserID(ctx, userID)
 	if err != nil {

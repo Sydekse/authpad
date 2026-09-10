@@ -22,7 +22,10 @@ type (
 	FieldType      = apptypes.FieldType
 	ProfileField   = apptypes.ProfileField
 	ProfileSchema  = apptypes.ProfileSchema
-	ProfileInput   = apptypes.ProfileInput
+	ProfileInput     = apptypes.ProfileInput
+	InvitationConfig = apptypes.InvitationConfig
+	TenancyConfig    = apptypes.TenancyConfig
+	Mailer           = apptypes.Mailer
 )
 
 const (

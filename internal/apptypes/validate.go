@@ -11,6 +11,12 @@ func (c *AppConfig) Validate() error {
 	if c.AuthDatabaseURL == "" {
 		return errors.New("AuthDatabaseURL is required")
 	}
+	if c.Tenancy.Enabled && c.IdPDatabaseURL == "" {
+		return errors.New("Tenancy.Enabled requires IdPDatabaseURL")
+	}
+	if c.Invitations.Enabled && c.IdPDatabaseURL == "" {
+		return errors.New("Invitations.Enabled requires IdPDatabaseURL")
+	}
 	if c.Env != "production" {
 		return nil
 	}

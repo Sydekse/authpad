@@ -90,3 +90,27 @@ func (r *RoleRepo) HasRole(ctx context.Context, userID uuid.UUID, roleName strin
 	`, userID, roleName).Scan(&exists)
 	return exists, err
 }
+
+func (r *RoleRepo) List(ctx context.Context) ([]idp.Role, error) {
+	rows, err := r.db.Query(ctx, `SELECT id, name, COALESCE(description, ''), created_at FROM roles ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []idp.Role
+	for rows.Next() {
+		var ro idp.Role
+		if err := rows.Scan(&ro.ID, &ro.Name, &ro.Description, &ro.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, ro)
+	}
+	return out, rows.Err()
+}
+
+func (r *RoleRepo) Create(ctx context.Context, name, description string) (*idp.Role, error) {
+	if err := r.UpsertRole(ctx, name, description); err != nil {
+		return nil, err
+	}
+	return r.GetByName(ctx, name)
+}

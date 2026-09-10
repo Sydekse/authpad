@@ -350,6 +350,14 @@ func (s *AuthService) RollbackUser(ctx context.Context, userID uuid.UUID) {
 	_ = s.userRepo.Delete(ctx, userID)
 }
 
-func (s *AuthService) FactorRepo() *auth_repo.FactorRepo {
-	return s.factorRepo
+func (s *AuthService) SetSessionMFAPending(ctx context.Context, sessionID uuid.UUID, pending bool) error {
+	return s.sessionRepo.SetMFAPending(ctx, sessionID, pending)
+}
+
+func (s *AuthService) SetSessionActiveOrganization(ctx context.Context, sessionID uuid.UUID, orgID *uuid.UUID) error {
+	return s.sessionRepo.SetActiveOrganization(ctx, sessionID, orgID)
+}
+
+func (s *AuthService) PasswordService() *security.PasswordService {
+	return s.password
 }

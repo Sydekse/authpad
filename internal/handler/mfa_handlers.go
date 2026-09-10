@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
@@ -109,43 +110,53 @@ func (h *MFAHandlers) DeleteFactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MFAHandlers) WebAuthnRegisterBegin(w http.ResponseWriter, r *http.Request) {
-	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
-	if !ok {
-		return
-	}
-	challenge, err := service.RandomChallenge()
-	if err != nil {
-		apierror.Internal(w, "WEBAUTHN_FAILED", "Could not start registration")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"challenge": challenge,
-		"user_id":   userID.String(),
-		"rp_name":   h.Cfg.Pages.AppName,
-	})
+	apierror.WriteJSON(w, http.StatusNotImplemented, "WEBAUTHN_DISABLED", "WebAuthn is not available until attestation verification is implemented")
 }
 
 func (h *MFAHandlers) WebAuthnRegisterFinish(w http.ResponseWriter, r *http.Request) {
-	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	apierror.WriteJSON(w, http.StatusNotImplemented, "WEBAUTHN_DISABLED", "WebAuthn is not available until attestation verification is implemented")
+}
+
+func (h *MFAHandlers) Challenge(w http.ResponseWriter, r *http.Request) {
+	userID, sessID, token, ok := requirePendingMFASession(w, r, h.Auth, h.Cfg)
 	if !ok {
 		return
 	}
 	var body struct {
-		Label        string `json:"label"`
-		CredentialID string `json:"credential_id"`
-		PublicKey    string `json:"public_key"`
+		FactorID string `json:"factor_id"`
+		Code     string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
 		return
 	}
-	if body.Label == "" {
-		body.Label = "Passkey"
+	var factorID *uuid.UUID
+	if strings.TrimSpace(body.FactorID) != "" {
+		id, err := uuid.Parse(body.FactorID)
+		if err != nil {
+			apierror.BadRequest(w, "INVALID_ID", "Invalid factor ID")
+			return
+		}
+		factorID = &id
 	}
-	f, err := h.MFA.StoreWebAuthnFactor(r.Context(), *userID, body.Label, body.CredentialID, body.PublicKey)
-	if err != nil {
-		apierror.Internal(w, "WEBAUTHN_FAILED", "Could not store passkey")
+	if err := h.MFA.VerifyLoginCode(r.Context(), *userID, factorID, body.Code); err != nil {
+		apierror.BadRequest(w, "MFA_INVALID", "Invalid MFA code")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"factor_id": f.ID.String()})
+	if err := h.Auth.SetSessionMFAPending(r.Context(), *sessID, false); err != nil {
+		apierror.Internal(w, "MFA_FAILED", "Could not complete MFA challenge")
+		return
+	}
+	if h.Cfg.Hooks.OnLogin != nil {
+		if err := h.Cfg.Hooks.OnLogin(r.Context(), *userID); err != nil {
+			_ = h.Auth.RevokeSession(r.Context(), *sessID)
+			apierror.Internal(w, "LOGIN_HOOK_FAILED", "Login hook failed")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"token": token,
+		"user":  map[string]string{"id": userID.String()},
+	})
 }

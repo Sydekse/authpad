@@ -53,3 +53,50 @@ type UserGroup struct {
 	JoinedAt  time.Time  `json:"joined_at"`
 	AddedBy   *uuid.UUID `json:"added_by,omitempty"`
 }
+
+type Invitation struct {
+	ID             uuid.UUID       `json:"id"`
+	Email          string          `json:"email"`
+	Role           string          `json:"role,omitempty"`
+	Payload        json.RawMessage `json:"payload,omitempty"`
+	TokenHash      string          `json:"-"`
+	ExpiresAt      time.Time       `json:"expires_at"`
+	InvitedBy      *uuid.UUID      `json:"invited_by,omitempty"`
+	RedeemedAt     *time.Time      `json:"redeemed_at,omitempty"`
+	RedeemedUserID *uuid.UUID      `json:"redeemed_user_id,omitempty"`
+	RevokedAt      *time.Time      `json:"revoked_at,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+}
+
+type Organization struct {
+	ID        uuid.UUID       `json:"id"`
+	Slug      string          `json:"slug"`
+	Name      string          `json:"name"`
+	ImageURL  string          `json:"image_url,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedBy *uuid.UUID      `json:"created_by,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type OrganizationMembership struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	UserID         uuid.UUID `json:"user_id"`
+	Role           string    `json:"role"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type OrganizationInvitation struct {
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID uuid.UUID  `json:"organization_id"`
+	Email          string     `json:"email"`
+	Role           string     `json:"role"`
+	TokenHash      string     `json:"-"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	InvitedBy      *uuid.UUID `json:"invited_by,omitempty"`
+	AcceptedAt     *time.Time `json:"accepted_at,omitempty"`
+	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
