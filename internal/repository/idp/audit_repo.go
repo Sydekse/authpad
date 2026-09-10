@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/auth-project/authpad/internal/database"
+	"github.com/Sydekse/authpad/internal/database"
 	"github.com/google/uuid"
 )
 

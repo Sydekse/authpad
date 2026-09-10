@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/resend/resend-go/v3"
 )
 

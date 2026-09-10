@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/auth-project/authpad/internal/database"
+	"github.com/Sydekse/authpad/internal/database"
 )
 
 // Ready returns a handler that checks Auth DB and IdP DB connectivity for readiness.

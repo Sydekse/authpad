@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/authpad/internal/apptypes"
-	"github.com/auth-project/authpad/internal/service"
-	"github.com/auth-project/authpad/pkg/apierror"
+	"github.com/Sydekse/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/service"
+	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/google/uuid"
 )
 

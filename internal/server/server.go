@@ -6,14 +6,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/auth-project/authpad/internal/database"
-	"github.com/auth-project/authpad/internal/handler"
-	"github.com/auth-project/authpad/internal/middleware"
-	auth_repo "github.com/auth-project/authpad/internal/repository/auth"
-	idp_repo "github.com/auth-project/authpad/internal/repository/idp"
-	"github.com/auth-project/authpad/internal/security"
-	"github.com/auth-project/authpad/internal/service"
-	"github.com/auth-project/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/database"
+	"github.com/Sydekse/authpad/internal/handler"
+	"github.com/Sydekse/authpad/internal/middleware"
+	auth_repo "github.com/Sydekse/authpad/internal/repository/auth"
+	idp_repo "github.com/Sydekse/authpad/internal/repository/idp"
+	"github.com/Sydekse/authpad/internal/security"
+	"github.com/Sydekse/authpad/internal/service"
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/go-chi/chi/v5"
 )
 

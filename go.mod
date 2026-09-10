@@ -1,4 +1,4 @@
-module github.com/auth-project/authpad
+module github.com/Sydekse/authpad
 
 go 1.24.0
 
