@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1
+
+- Security: service-key checks and CSRF cookie comparison use constant-time equality
+- Hosts can replace Resend for password-reset and verification mail, not only invitations
+- Redeeming an already-used invitation now fails instead of reporting success
+- Removed unused `ValidateConfigProduction` (production page checks live in `Validate`)
+- Stopped shipping compiled `server` and `out` binaries in the module zip
+
 ## 0.1.0
 
 - Security: CSRF no longer bypasses on an unvalidated Bearer header or empty service key
