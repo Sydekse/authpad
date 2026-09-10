@@ -7,20 +7,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/Sydekse/authpad/internal/domain/idp"
 	idp_repo "github.com/Sydekse/authpad/internal/repository/idp"
-	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/google/uuid"
 )
 
 // IdPService handles identity data (IdP DB only).
 type IdPService struct {
-	profileRepo      *idp_repo.ProfileRepo
-	roleRepo         *idp_repo.RoleRepo
-	groupRepo        *idp_repo.GroupRepo
-	auditRepo        *idp_repo.AuditRepo
-	roles            []apptypes.RoleDefinition
-	onRoleAssigned   func(ctx context.Context, userID uuid.UUID, role string) error
+	profileRepo    *idp_repo.ProfileRepo
+	roleRepo       *idp_repo.RoleRepo
+	groupRepo      *idp_repo.GroupRepo
+	auditRepo      *idp_repo.AuditRepo
+	roles          []apptypes.RoleDefinition
+	onRoleAssigned func(ctx context.Context, userID uuid.UUID, role string) error
 }
 
 func NewIdPService(

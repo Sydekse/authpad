@@ -29,5 +29,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed for:"; echo "$unformatted"
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test ./...
