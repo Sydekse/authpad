@@ -138,8 +138,14 @@ func (r *OrgRepo) GetInvitationByTokenHash(ctx context.Context, tokenHash string
 }
 
 func (r *OrgRepo) AcceptInvitation(ctx context.Context, id uuid.UUID) error {
-	_, err := r.db.Exec(ctx, `UPDATE organization_invitations SET accepted_at = NOW() WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL`, id)
-	return err
+	res, err := r.db.Exec(ctx, `UPDATE organization_invitations SET accepted_at = NOW() WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return ErrInvitationNotPending
+	}
+	return nil
 }
 
 func (r *OrgRepo) RevokeInvitation(ctx context.Context, id uuid.UUID) error {

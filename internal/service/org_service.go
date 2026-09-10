@@ -300,6 +300,9 @@ func (s *OrgService) AcceptInvite(ctx context.Context, rawToken string, userID u
 		return nil, err
 	}
 	if err := s.repo.AcceptInvitation(ctx, inv.ID); err != nil {
+		if errors.Is(err, idp_repo.ErrInvitationNotPending) {
+			return nil, ErrInviteUsed
+		}
 		return nil, err
 	}
 	return s.repo.GetByID(ctx, inv.OrganizationID)

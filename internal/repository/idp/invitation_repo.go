@@ -3,12 +3,15 @@ package idp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/Sydekse/authpad/internal/database"
 	"github.com/Sydekse/authpad/internal/domain/idp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+var ErrInvitationNotPending = errors.New("invitation is not pending")
 
 type InvitationRepo struct {
 	db *database.IdPDB
@@ -69,11 +72,17 @@ func (r *InvitationRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 }
 
 func (r *InvitationRepo) MarkRedeemed(ctx context.Context, id, userID uuid.UUID) error {
-	_, err := r.db.Exec(ctx, `
+	res, err := r.db.Exec(ctx, `
 		UPDATE invitations SET redeemed_at = NOW(), redeemed_user_id = $2
 		WHERE id = $1 AND revoked_at IS NULL AND redeemed_at IS NULL
 	`, id, userID)
-	return err
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return ErrInvitationNotPending
+	}
+	return nil
 }
 
 type rowScanner interface {

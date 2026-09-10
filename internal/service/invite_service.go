@@ -136,6 +136,9 @@ func (s *InviteService) Redeem(ctx context.Context, rawToken, name, password str
 		if s.idp != nil {
 			_ = s.idp.RollbackProfile(ctx, result.UserID)
 		}
+		if errors.Is(err, idp_repo.ErrInvitationNotPending) {
+			return nil, ErrInviteUsed
+		}
 		return nil, err
 	}
 	return result, nil
