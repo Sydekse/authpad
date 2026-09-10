@@ -2,9 +2,6 @@ package auth
 
 import (
 	"errors"
-	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
@@ -72,31 +69,4 @@ func IdPEnabled(c Config) bool {
 
 func ValidateProfile(schema ProfileSchema, raw map[string]any) (ProfileInput, error) {
 	return apptypes.ProfileSchema(schema).ValidateProfile(raw)
-}
-
-func validateProductionPages(c *Config) error {
-	for _, pageURL := range []string{c.Pages.SignInURL, c.Pages.ResetPasswordURL, c.Pages.VerifyEmailURL, c.Pages.CallbackURL} {
-		if pageURL == "" {
-			continue
-		}
-		u, err := url.Parse(strings.TrimSpace(pageURL))
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("page URL must be absolute: %q", pageURL)
-		}
-		if u.Scheme != "https" {
-			return fmt.Errorf("page URL must use https in production: %q", pageURL)
-		}
-	}
-	return nil
-}
-
-// ValidateConfigProduction adds extra checks used by example server.
-func ValidateConfigProduction(c *Config) error {
-	if err := ValidateConfig(c); err != nil {
-		return err
-	}
-	if c.Env != "production" {
-		return nil
-	}
-	return validateProductionPages(c)
 }
