@@ -80,23 +80,48 @@ type Organization struct {
 }
 
 type OrganizationMembership struct {
-	ID             uuid.UUID `json:"id"`
-	OrganizationID uuid.UUID `json:"organization_id"`
-	UserID         uuid.UUID `json:"user_id"`
-	Role           string    `json:"role"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID uuid.UUID  `json:"organization_id"`
+	UserID         uuid.UUID  `json:"user_id"`
+	Role           string     `json:"role"`
+	Status         string     `json:"status"`
+	DepartmentID   *uuid.UUID `json:"department_id,omitempty"`
+	LevelID        *uuid.UUID `json:"level_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 type OrganizationInvitation struct {
-	ID             uuid.UUID  `json:"id"`
-	OrganizationID uuid.UUID  `json:"organization_id"`
-	Email          string     `json:"email"`
-	Role           string     `json:"role"`
-	TokenHash      string     `json:"-"`
-	ExpiresAt      time.Time  `json:"expires_at"`
-	InvitedBy      *uuid.UUID `json:"invited_by,omitempty"`
-	AcceptedAt     *time.Time `json:"accepted_at,omitempty"`
-	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID             uuid.UUID       `json:"id"`
+	OrganizationID uuid.UUID       `json:"organization_id"`
+	Email          string          `json:"email"`
+	Role           string          `json:"role"`
+	TokenHash      string          `json:"-"`
+	Payload        json.RawMessage `json:"payload,omitempty"`
+	ExpiresAt      time.Time       `json:"expires_at"`
+	InvitedBy      *uuid.UUID      `json:"invited_by,omitempty"`
+	AcceptedAt     *time.Time      `json:"accepted_at,omitempty"`
+	RevokedAt      *time.Time      `json:"revoked_at,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+}
+
+type OrganizationRole struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type OrganizationDepartment struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	Name           string    `json:"name"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type OrganizationLevel struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	Name           string    `json:"name"`
+	CreatedAt      time.Time `json:"created_at"`
 }

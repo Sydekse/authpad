@@ -93,7 +93,9 @@ cfg.Tenancy.AllowPersonalAccounts = true
 cfg.Tenancy.MaxMembershipsPerUser = 0 // unlimited; use 1 for single-home
 ```
 
-Mounted when enabled: `POST/GET /organizations`, org members/invites, `POST /session/organization`.
+Mounted when enabled: `POST/GET /organizations`, members, per-org roles/departments/levels, org invites, `POST /session/organization`.
+
+Each organization has its own role catalog (seeded `owner`/`admin`/`member`), departments, and levels. `Tenancy.OrgRoles` is the seed list for new orgs, not a process-wide allowlist.
 
 Company-mode signup (`RequireOnSignup`) must create an organization (`organization_name`) or accept `org_invite_token`. Session and `/account` include `organization` and `org_role` when an org is active.
 

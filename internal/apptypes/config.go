@@ -93,6 +93,10 @@ type Hooks struct {
 	AssignmentPolicy func(ctx context.Context, actor, target uuid.UUID, role, op string) error
 	// InvitePolicy is consulted before issuing a generic invitation.
 	InvitePolicy func(ctx context.Context, actor uuid.UUID, email, role string) error
+	// OrgInvitePolicy is consulted before issuing an organization invitation.
+	// Return a non-nil error to deny the operation. Hosts use it for per-org
+	// hierarchies (for example only the Sydek org owner may invite admin).
+	OrgInvitePolicy func(ctx context.Context, actor uuid.UUID, orgSlug, email, role string) error
 }
 
 type FieldType string

@@ -13,6 +13,7 @@ import (
 	idp_repo "github.com/Sydekse/authpad/internal/repository/idp"
 	"github.com/Sydekse/authpad/internal/security"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
@@ -24,9 +25,16 @@ var (
 	ErrOrgCreateDisabled = errors.New("creating organizations is disabled")
 	ErrInvalidSlug       = errors.New("invalid organization slug")
 	ErrOrgRequired       = errors.New("organization is required")
+	ErrInvalidOrgRole    = errors.New("invalid organization role")
+	ErrOrgRoleExists     = errors.New("organization role already exists")
+	ErrOrgNameTaken      = errors.New("name already exists")
+	ErrOrgRoleReserved   = errors.New("organization role is reserved")
 )
 
-var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var (
+	slugPattern    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	orgRolePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,49}$`)
+)
 
 type OrgService struct {
 	repo *idp_repo.OrgRepo
@@ -42,21 +50,24 @@ func (s *OrgService) enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Tenancy.Enabled
 }
 
-func (s *OrgService) IsOrgRole(role string) bool {
-	role = strings.TrimSpace(strings.ToLower(role))
-	if role == "" {
-		return false
-	}
+func (s *OrgService) seedRoleDefs() []apptypes.RoleDefinition {
 	roles := s.cfg.Tenancy.OrgRoles
 	if len(roles) == 0 {
-		roles = []apptypes.RoleDefinition{{Name: "owner"}, {Name: "admin"}, {Name: "member"}}
-	}
-	for _, r := range roles {
-		if strings.EqualFold(r.Name, role) {
-			return true
+		return []apptypes.RoleDefinition{
+			{Name: "owner", Description: "Organization owner"},
+			{Name: "admin", Description: "Organization admin"},
+			{Name: "member", Description: "Organization member"},
 		}
 	}
-	return false
+	return roles
+}
+
+func (s *OrgService) HasOrgRole(ctx context.Context, orgID uuid.UUID, role string) (bool, error) {
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "" {
+		return false, nil
+	}
+	return s.repo.RoleExists(ctx, orgID, role)
 }
 
 func (s *OrgService) defaultRole() string {
@@ -118,6 +129,15 @@ func (s *OrgService) Create(ctx context.Context, userID uuid.UUID, name, slug st
 		UpdatedAt: time.Now(),
 	}
 	if err := s.repo.Create(ctx, org); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrInvalidSlug
+		}
+		return nil, err
+	}
+	if err := s.repo.SeedDefaultRoles(ctx, org.ID); err != nil {
+		return nil, err
+	}
+	if err := s.seedExtraRoles(ctx, org.ID); err != nil {
 		return nil, err
 	}
 	if err := s.repo.AddMembership(ctx, &idp.OrganizationMembership{
@@ -229,7 +249,7 @@ func (s *OrgService) ListMembers(ctx context.Context, slug string, actor uuid.UU
 	return s.repo.ListMembers(ctx, org.ID)
 }
 
-func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, email, role string) (rawToken string, inv *idp.OrganizationInvitation, err error) {
+func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, email, role string, payload map[string]any) (rawToken string, inv *idp.OrganizationInvitation, err error) {
 	org, err := s.GetBySlug(ctx, slug)
 	if err != nil {
 		return "", nil, err
@@ -238,12 +258,28 @@ func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, e
 		return "", nil, err
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return "", nil, errors.New("email is required")
+	}
 	role = strings.TrimSpace(strings.ToLower(role))
 	if role == "" {
 		role = s.defaultRole()
 	}
-	if !s.IsOrgRole(role) || role == "owner" {
-		return "", nil, errors.New("invalid organization role")
+	ok, err := s.HasOrgRole(ctx, org.ID, role)
+	if err != nil {
+		return "", nil, err
+	}
+	if !ok || role == "owner" {
+		return "", nil, ErrInvalidOrgRole
+	}
+	if s.cfg.Hooks.OrgInvitePolicy != nil {
+		if err := s.cfg.Hooks.OrgInvitePolicy(ctx, actor, org.Slug, email, role); err != nil {
+			return "", nil, err
+		}
+	}
+	rawPayload, err := marshalPayload(payload)
+	if err != nil {
+		return "", nil, err
 	}
 	rawToken, err = security.GenerateOpaqueToken()
 	if err != nil {
@@ -259,6 +295,7 @@ func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, e
 		Email:          email,
 		Role:           role,
 		TokenHash:      security.HashToken(rawToken),
+		Payload:        rawPayload,
 		ExpiresAt:      time.Now().Add(ttl),
 		InvitedBy:      &actor,
 		CreatedAt:      time.Now(),
@@ -289,12 +326,33 @@ func (s *OrgService) AcceptInvite(ctx context.Context, rawToken string, userID u
 	if err := s.checkMembershipLimit(ctx, userID); err != nil {
 		return nil, err
 	}
+	deptID, levelID := extrasFromPayload(inv.Payload)
+	if deptID != nil {
+		ok, err := s.repo.DepartmentExists(ctx, inv.OrganizationID, *deptID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			deptID = nil
+		}
+	}
+	if levelID != nil {
+		ok, err := s.repo.LevelExists(ctx, inv.OrganizationID, *levelID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			levelID = nil
+		}
+	}
 	if err := s.repo.AddMembership(ctx, &idp.OrganizationMembership{
 		ID:             uuid.New(),
 		OrganizationID: inv.OrganizationID,
 		UserID:         userID,
 		Role:           inv.Role,
 		Status:         "active",
+		DepartmentID:   deptID,
+		LevelID:        levelID,
 		CreatedAt:      time.Now(),
 	}); err != nil {
 		return nil, err
@@ -429,4 +487,344 @@ func FilterOrgPrivateMetadata(cfg *apptypes.AppConfig, metadata map[string]any, 
 		delete(out, k)
 	}
 	return out
+}
+
+func (s *OrgService) seedExtraRoles(ctx context.Context, orgID uuid.UUID) error {
+	for _, def := range s.seedRoleDefs() {
+		name := strings.TrimSpace(strings.ToLower(def.Name))
+		if name == "" || name == "owner" || name == "admin" || name == "member" {
+			continue
+		}
+		if !orgRolePattern.MatchString(name) {
+			continue
+		}
+		desc := strings.TrimSpace(def.Description)
+		if desc == "" {
+			desc = name
+		}
+		err := s.repo.CreateRole(ctx, &idp.OrganizationRole{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			Name:           name,
+			Description:    desc,
+			CreatedAt:      time.Now(),
+		})
+		if err != nil && !isUniqueViolation(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// Ensure returns the organization with slug, creating it when missing.
+// createdBy, when not uuid.Nil, is added (or promoted) as owner.
+func (s *OrgService) Ensure(ctx context.Context, slug, name string, createdBy uuid.UUID) (*idp.Organization, error) {
+	if !s.enabled() {
+		return nil, ErrTenancyDisabled
+	}
+	slug = strings.TrimSpace(strings.ToLower(slug))
+	if !slugPattern.MatchString(slug) {
+		return nil, ErrInvalidSlug
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = slug
+	}
+	org, err := s.repo.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if org == nil {
+		org = &idp.Organization{
+			ID:        uuid.New(),
+			Slug:      slug,
+			Name:      name,
+			Metadata:  json.RawMessage(`{}`),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if createdBy != uuid.Nil {
+			org.CreatedBy = &createdBy
+		}
+		if err := s.repo.Create(ctx, org); err != nil {
+			if isUniqueViolation(err) {
+				org, err = s.repo.GetBySlug(ctx, slug)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, err
+			}
+		}
+	}
+	if err := s.repo.SeedDefaultRoles(ctx, org.ID); err != nil {
+		return nil, err
+	}
+	if err := s.seedExtraRoles(ctx, org.ID); err != nil {
+		return nil, err
+	}
+	if createdBy != uuid.Nil {
+		if err := s.repo.AddMembership(ctx, &idp.OrganizationMembership{
+			ID:             uuid.New(),
+			OrganizationID: org.ID,
+			UserID:         createdBy,
+			Role:           "owner",
+			Status:         "active",
+			CreatedAt:      time.Now(),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return org, nil
+}
+
+func (s *OrgService) CreateRole(ctx context.Context, orgID uuid.UUID, name, description string) (*idp.OrganizationRole, error) {
+	if !s.enabled() {
+		return nil, ErrTenancyDisabled
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "owner" {
+		return nil, ErrOrgRoleReserved
+	}
+	if !orgRolePattern.MatchString(name) {
+		return nil, ErrInvalidOrgRole
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		description = name
+	}
+	role := &idp.OrganizationRole{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		Name:           name,
+		Description:    description,
+		CreatedAt:      time.Now(),
+	}
+	if err := s.repo.CreateRole(ctx, role); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrOrgRoleExists
+		}
+		return nil, err
+	}
+	return role, nil
+}
+
+func (s *OrgService) ListRoles(ctx context.Context, slug string, actor uuid.UUID) ([]idp.OrganizationRole, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireMember(ctx, org.ID, actor); err != nil {
+		return nil, err
+	}
+	return s.repo.ListRoles(ctx, org.ID)
+}
+
+func (s *OrgService) CreateRoleForActor(ctx context.Context, slug string, actor uuid.UUID, name, description string) (*idp.OrganizationRole, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner"); err != nil {
+		return nil, err
+	}
+	return s.CreateRole(ctx, org.ID, name, description)
+}
+
+func (s *OrgService) CreateDepartment(ctx context.Context, orgID uuid.UUID, name string) (*idp.OrganizationDepartment, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	d := &idp.OrganizationDepartment{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		Name:           name,
+		CreatedAt:      time.Now(),
+	}
+	if err := s.repo.CreateDepartment(ctx, d); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrOrgNameTaken
+		}
+		return nil, err
+	}
+	return d, nil
+}
+
+func (s *OrgService) ListDepartments(ctx context.Context, slug string, actor uuid.UUID) ([]idp.OrganizationDepartment, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireMember(ctx, org.ID, actor); err != nil {
+		return nil, err
+	}
+	return s.repo.ListDepartments(ctx, org.ID)
+}
+
+func (s *OrgService) CreateDepartmentForActor(ctx context.Context, slug string, actor uuid.UUID, name string) (*idp.OrganizationDepartment, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	return s.CreateDepartment(ctx, org.ID, name)
+}
+
+func (s *OrgService) DeleteDepartment(ctx context.Context, slug string, actor, id uuid.UUID) error {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
+		return err
+	}
+	n, err := s.repo.DeleteDepartment(ctx, org.ID, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrOrgNotFound
+	}
+	return nil
+}
+
+func (s *OrgService) CreateLevel(ctx context.Context, orgID uuid.UUID, name string) (*idp.OrganizationLevel, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	l := &idp.OrganizationLevel{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		Name:           name,
+		CreatedAt:      time.Now(),
+	}
+	if err := s.repo.CreateLevel(ctx, l); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrOrgNameTaken
+		}
+		return nil, err
+	}
+	return l, nil
+}
+
+func (s *OrgService) ListLevels(ctx context.Context, slug string, actor uuid.UUID) ([]idp.OrganizationLevel, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireMember(ctx, org.ID, actor); err != nil {
+		return nil, err
+	}
+	return s.repo.ListLevels(ctx, org.ID)
+}
+
+func (s *OrgService) CreateLevelForActor(ctx context.Context, slug string, actor uuid.UUID, name string) (*idp.OrganizationLevel, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	return s.CreateLevel(ctx, org.ID, name)
+}
+
+func (s *OrgService) DeleteLevel(ctx context.Context, slug string, actor, id uuid.UUID) error {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
+		return err
+	}
+	n, err := s.repo.DeleteLevel(ctx, org.ID, id)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrOrgNotFound
+	}
+	return nil
+}
+
+func (s *OrgService) ListInvitations(ctx context.Context, slug string, actor uuid.UUID) ([]idp.OrganizationInvitation, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	return s.repo.ListInvitations(ctx, org.ID)
+}
+
+func (s *OrgService) PeekInvitation(ctx context.Context, rawToken string) (*idp.OrganizationInvitation, *idp.Organization, error) {
+	if !s.enabled() {
+		return nil, nil, ErrTenancyDisabled
+	}
+	inv, err := s.repo.GetInvitationByTokenHash(ctx, security.HashToken(strings.TrimSpace(rawToken)))
+	if err != nil || inv == nil {
+		return nil, nil, ErrInviteInvalid
+	}
+	if inv.RevokedAt != nil {
+		return nil, nil, ErrInviteRevoked
+	}
+	if inv.AcceptedAt != nil {
+		return nil, nil, ErrInviteUsed
+	}
+	if time.Now().After(inv.ExpiresAt) {
+		return nil, nil, ErrInviteInvalid
+	}
+	org, err := s.repo.GetByID(ctx, inv.OrganizationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return inv, org, nil
+}
+
+func marshalPayload(payload map[string]any) (json.RawMessage, error) {
+	if len(payload) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(b), nil
+}
+
+func extrasFromPayload(raw json.RawMessage) (deptID, levelID *uuid.UUID) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var p map[string]any
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, nil
+	}
+	return uuidFromMap(p, "department_id"), uuidFromMap(p, "level_id")
+}
+
+func uuidFromMap(p map[string]any, key string) *uuid.UUID {
+	v, ok := p[key]
+	if !ok || v == nil {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok || strings.TrimSpace(s) == "" {
+		return nil
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return nil
+	}
+	return &id
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

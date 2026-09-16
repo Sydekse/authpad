@@ -2,6 +2,10 @@
 
 Embeddable Go authentication library with optional IdP (profiles, roles, groups) and an opt-in company tenancy module.
 
+**Full docs:** [https://docs.sydek.dev/docs/authpad](https://docs.sydek.dev/docs/authpad) (local: `http://localhost:3005/docs/authpad`).
+
+This is the public starter pack for running your own Go auth service. Sydek’s hosted login app (`auth.sydek.dev`) is a separate internal product.
+
 ## Features
 
 - Email/password auth, opaque sessions (cookie + Bearer), OAuth (Google/GitHub)
@@ -47,7 +51,7 @@ err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
 
 ## Company tenancy
 
-Off by default. Enable with `AUTHPAD_TENANCY_ENABLED=true` or `cfg.Tenancy.Enabled = true` (requires IdP). Users can belong to many organizations, switch `active_organization_id` on the session, and hold org-scoped roles (`owner`, `admin`, `member`). Set `MaxMembershipsPerUser: 1` for single-home products.
+Off by default. Enable with `AUTHPAD_TENANCY_ENABLED=true` or `cfg.Tenancy.Enabled = true` (requires IdP). Users can belong to many organizations, switch `active_organization_id` on the session, and hold **per-org** roles (seeded `owner`, `admin`, `member`; hosts may add more). Each organization also has its own departments and levels. Set `MaxMembershipsPerUser: 1` for single-home products. Hosts can seed an org with `EnsureOrganization`.
 
 ## Invitations
 

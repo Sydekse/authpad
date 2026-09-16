@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Per-organization roles, departments, and levels
+- Organization invitations carry a JSON payload; memberships may reference a department and level
+- Host API: EnsureOrganization, org structure CRUD, invite/accept, RequireOrgMember / RequireOrgRole
+- Org invite policy hook for host-specific invite hierarchies
+
 ## 0.1.1
 
 - Security: service-key checks and CSRF cookie comparison use constant-time equality

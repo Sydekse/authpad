@@ -32,3 +32,12 @@ func TestFilterOrgPrivateMetadata(t *testing.T) {
 		t.Fatal("org-private field should remain when an org is active")
 	}
 }
+
+func TestOrgRolePattern(t *testing.T) {
+	if !orgRolePattern.MatchString("recruiter") || !orgRolePattern.MatchString("admin") {
+		t.Fatal("expected valid slugs")
+	}
+	if orgRolePattern.MatchString("team member") || orgRolePattern.MatchString("Owner") {
+		t.Fatal("spaces and capitals are not org role slugs")
+	}
+}

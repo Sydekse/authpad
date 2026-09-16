@@ -302,11 +302,21 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 		}
 
 		if s.cfg.Tenancy.Enabled && s.orgs != nil && !s.skipPath("/organizations") {
+			r.With(rateLimit).Get("/organizations/invitations/{token}/validate", s.orgs.ValidateInvite)
 			r.With(csrf).Post("/organizations", s.orgs.Create)
 			r.Get("/organizations", s.orgs.List)
 			r.Get("/organizations/{slug}", s.orgs.Get)
 			r.With(csrf).Patch("/organizations/{slug}", s.orgs.Patch)
 			r.Get("/organizations/{slug}/members", s.orgs.Members)
+			r.Get("/organizations/{slug}/roles", s.orgs.ListRoles)
+			r.With(csrf).Post("/organizations/{slug}/roles", s.orgs.CreateRole)
+			r.Get("/organizations/{slug}/departments", s.orgs.ListDepartments)
+			r.With(csrf).Post("/organizations/{slug}/departments", s.orgs.CreateDepartment)
+			r.With(csrf).Delete("/organizations/{slug}/departments/{id}", s.orgs.DeleteDepartment)
+			r.Get("/organizations/{slug}/levels", s.orgs.ListLevels)
+			r.With(csrf).Post("/organizations/{slug}/levels", s.orgs.CreateLevel)
+			r.With(csrf).Delete("/organizations/{slug}/levels/{id}", s.orgs.DeleteLevel)
+			r.Get("/organizations/{slug}/invitations", s.orgs.ListInvitations)
 			r.With(csrf).Post("/organizations/{slug}/invitations", s.orgs.Invite)
 			r.With(csrf).Delete("/organizations/{slug}/invitations/{id}", s.orgs.RevokeInvite)
 			r.With(csrf).Post("/organizations/invitations/accept", s.orgs.AcceptInvite)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
+	"github.com/Sydekse/authpad/internal/domain/idp"
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/go-chi/chi/v5"
@@ -28,8 +29,11 @@ func writeOrgErr(w http.ResponseWriter, err error) {
 		apierror.NotFound(w, "ORG_NOT_FOUND", err.Error())
 	case errors.Is(err, service.ErrNotOrgMember), errors.Is(err, service.ErrOrgForbidden):
 		apierror.Forbidden(w, "FORBIDDEN", err.Error())
-	case errors.Is(err, service.ErrMembershipLimit), errors.Is(err, service.ErrOrgCreateDisabled), errors.Is(err, service.ErrInvalidSlug):
+	case errors.Is(err, service.ErrMembershipLimit), errors.Is(err, service.ErrOrgCreateDisabled), errors.Is(err, service.ErrInvalidSlug),
+		errors.Is(err, service.ErrInvalidOrgRole), errors.Is(err, service.ErrOrgRoleReserved), errors.Is(err, service.ErrOrgNameTaken):
 		apierror.BadRequest(w, "ORG_INVALID", err.Error())
+	case errors.Is(err, service.ErrOrgRoleExists):
+		apierror.Conflict(w, "ROLE_EXISTS", err.Error())
 	default:
 		apierror.Internal(w, "ORG_FAILED", err.Error())
 	}
@@ -127,15 +131,16 @@ func (h *OrgHandlers) Invite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Email       string `json:"email"`
-		Role        string `json:"role"`
-		CallbackURL string `json:"callback_url"`
+		Email       string         `json:"email"`
+		Role        string         `json:"role"`
+		Payload     map[string]any `json:"payload"`
+		CallbackURL string         `json:"callback_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
 		return
 	}
-	token, inv, err := h.Orgs.Invite(r.Context(), chi.URLParam(r, "slug"), *userID, body.Email, body.Role)
+	token, inv, err := h.Orgs.Invite(r.Context(), chi.URLParam(r, "slug"), *userID, body.Email, body.Role, body.Payload)
 	if err != nil {
 		writeOrgErr(w, err)
 		return
@@ -155,6 +160,7 @@ func (h *OrgHandlers) Invite(w http.ResponseWriter, r *http.Request) {
 		"id":         inv.ID.String(),
 		"email":      inv.Email,
 		"role":       inv.Role,
+		"payload":    inv.Payload,
 		"expires_at": inv.ExpiresAt,
 		"token":      token,
 	})
@@ -238,4 +244,205 @@ func (h *OrgHandlers) Switch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *OrgHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	roles, err := h.Orgs.ListRoles(r.Context(), chi.URLParam(r, "slug"), *userID)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	if roles == nil {
+		roles = []idp.OrganizationRole{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+}
+
+func (h *OrgHandlers) CreateRole(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
+		return
+	}
+	role, err := h.Orgs.CreateRoleForActor(r.Context(), chi.URLParam(r, "slug"), *userID, body.Name, body.Description)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, role)
+}
+
+func (h *OrgHandlers) ListDepartments(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	items, err := h.Orgs.ListDepartments(r.Context(), chi.URLParam(r, "slug"), *userID)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	if items == nil {
+		items = []idp.OrganizationDepartment{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"departments": items})
+}
+
+func (h *OrgHandlers) CreateDepartment(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
+		return
+	}
+	item, err := h.Orgs.CreateDepartmentForActor(r.Context(), chi.URLParam(r, "slug"), *userID, body.Name)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (h *OrgHandlers) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid department id")
+		return
+	}
+	if err := h.Orgs.DeleteDepartment(r.Context(), chi.URLParam(r, "slug"), *userID, id); err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *OrgHandlers) ListLevels(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	items, err := h.Orgs.ListLevels(r.Context(), chi.URLParam(r, "slug"), *userID)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	if items == nil {
+		items = []idp.OrganizationLevel{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"levels": items})
+}
+
+func (h *OrgHandlers) CreateLevel(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
+		return
+	}
+	item, err := h.Orgs.CreateLevelForActor(r.Context(), chi.URLParam(r, "slug"), *userID, body.Name)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (h *OrgHandlers) DeleteLevel(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid level id")
+		return
+	}
+	if err := h.Orgs.DeleteLevel(r.Context(), chi.URLParam(r, "slug"), *userID, id); err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *OrgHandlers) ListInvitations(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	items, err := h.Orgs.ListInvitations(r.Context(), chi.URLParam(r, "slug"), *userID)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		inv := items[i]
+		status := "pending"
+		if inv.RevokedAt != nil {
+			status = "revoked"
+		} else if inv.AcceptedAt != nil {
+			status = "accepted"
+		}
+		out = append(out, map[string]any{
+			"id":         inv.ID.String(),
+			"email":      inv.Email,
+			"role":       inv.Role,
+			"status":     status,
+			"payload":    inv.Payload,
+			"expires_at": inv.ExpiresAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitations": out})
+}
+
+func (h *OrgHandlers) ValidateInvite(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	if token == "" {
+		apierror.BadRequest(w, "INVALID_TOKEN", "Token is required")
+		return
+	}
+	inv, org, err := h.Orgs.PeekInvitation(r.Context(), token)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false})
+		return
+	}
+	slug := ""
+	if org != nil {
+		slug = org.Slug
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid": true,
+		"invite": map[string]any{
+			"email":      inv.Email,
+			"role":       inv.Role,
+			"org_slug":   slug,
+			"payload":    inv.Payload,
+			"expires_at": inv.ExpiresAt,
+		},
+	})
 }
