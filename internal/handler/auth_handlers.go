@@ -150,6 +150,10 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 			apierror.Forbidden(w, "EMAIL_NOT_VERIFIED", "Email verification required")
 			return
 		}
+		if errors.Is(err, service.ErrAccountLocked) {
+			apierror.Forbidden(w, "ACCOUNT_LOCKED", "This account is locked. Contact an administrator.")
+			return
+		}
 		apierror.Unauthorized(w, "INVALID_CREDENTIALS", "Invalid email or password")
 		return
 	}

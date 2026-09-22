@@ -16,6 +16,7 @@ import (
 	"github.com/Sydekse/authpad/internal/security"
 	"github.com/Sydekse/authpad/internal/service"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // Server is the wired auth library instance.
@@ -35,6 +36,7 @@ type Server struct {
 	IdPSvc     *service.IdPService
 	OrgSvc     *service.OrgService
 	InviteSvc  *service.InviteService
+	MFASvc     *service.MFAService
 	Password   *security.PasswordService
 }
 
@@ -149,6 +151,7 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		orgRepo := idp_repo.NewOrgRepo(idpDB)
 		orgSvc = service.NewOrgService(orgRepo, &cfg, authSvc)
 	}
+	authSvc.SetStaffFunc(staffClassifier(cfg, idpSvc, orgSvc))
 	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, mfaSvc, userAuthRepo, oauthRepo, oauthStateRepo, auditSvc, orgSvc)
 
 	srv := &Server{
@@ -160,6 +163,7 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		IdPSvc:     idpSvc,
 		OrgSvc:     orgSvc,
 		InviteSvc:  inviteSvc,
+		MFASvc:     mfaSvc,
 		Password:   passwordSvc,
 		auth: &handler.AuthHandlers{
 			Account: accountSvc,
@@ -283,6 +287,8 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 				r.Get("/admin/roles", s.admin.ListRoles)
 				r.With(csrf).Post("/admin/roles", s.admin.CreateRole)
 			}
+			r.With(csrf).Post("/admin/users/{id}/lock", s.admin.LockUser)
+			r.With(csrf).Post("/admin/users/{id}/unlock", s.admin.UnlockUser)
 			r.With(csrf).Post("/admin/roles/assign", s.admin.AssignRole)
 			r.With(csrf).Post("/admin/roles/revoke", s.admin.RevokeRole)
 			r.With(csrf).Post("/admin/groups", s.admin.CreateGroup)
@@ -308,6 +314,8 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			r.Get("/organizations/{slug}", s.orgs.Get)
 			r.With(csrf).Patch("/organizations/{slug}", s.orgs.Patch)
 			r.Get("/organizations/{slug}/members", s.orgs.Members)
+			r.With(csrf).Patch("/organizations/{slug}/members/{userId}", s.orgs.PatchMember)
+			r.With(csrf).Delete("/organizations/{slug}/members/{userId}", s.orgs.DeleteMember)
 			r.Get("/organizations/{slug}/roles", s.orgs.ListRoles)
 			r.With(csrf).Post("/organizations/{slug}/roles", s.orgs.CreateRole)
 			r.Get("/organizations/{slug}/departments", s.orgs.ListDepartments)
@@ -340,6 +348,29 @@ func (s *Server) AuthHandlersCfg() *apptypes.AppConfig {
 		return s.auth.Cfg
 	}
 	return &s.cfg
+}
+
+func staffClassifier(cfg apptypes.AppConfig, idp *service.IdPService, orgs *service.OrgService) service.StaffFunc {
+	roles := cfg.Tenancy.StaffOrgRoles
+	if len(roles) == 0 {
+		roles = []string{"owner", "admin"}
+	}
+	adminRole := cfg.Security.AdminRoleName
+	return func(ctx context.Context, userID uuid.UUID) (bool, error) {
+		if idp != nil && adminRole != "" {
+			ok, err := idp.HasRole(ctx, userID, adminRole)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		if orgs == nil {
+			return false, nil
+		}
+		return orgs.IsStaffMember(ctx, userID, roles)
+	}
 }
 
 func mfaIssuer(cfg apptypes.AppConfig) string {

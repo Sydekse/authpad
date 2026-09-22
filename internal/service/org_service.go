@@ -29,6 +29,7 @@ var (
 	ErrOrgRoleExists     = errors.New("organization role already exists")
 	ErrOrgNameTaken      = errors.New("name already exists")
 	ErrOrgRoleReserved   = errors.New("organization role is reserved")
+	ErrLastOwner         = errors.New("cannot change or remove the last owner")
 )
 
 var (
@@ -249,13 +250,183 @@ func (s *OrgService) ListMembers(ctx context.Context, slug string, actor uuid.UU
 	return s.repo.ListMembers(ctx, org.ID)
 }
 
+// AddMember inserts or updates an active membership. Existing membership of this org does not consume another seat.
+func (s *OrgService) AddMember(ctx context.Context, orgID, userID uuid.UUID, role string) (*idp.OrganizationMembership, error) {
+	if !s.enabled() {
+		return nil, ErrTenancyDisabled
+	}
+	role = strings.TrimSpace(strings.ToLower(role))
+	ok, err := s.HasOrgRole(ctx, orgID, role)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrInvalidOrgRole
+	}
+	existing, err := s.repo.GetMembership(ctx, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		if err := s.checkMembershipLimit(ctx, userID); err != nil {
+			return nil, err
+		}
+	}
+	m := &idp.OrganizationMembership{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		UserID:         userID,
+		Role:           role,
+		Status:         "active",
+		CreatedAt:      time.Now(),
+	}
+	if existing != nil {
+		m.ID = existing.ID
+		m.CreatedAt = existing.CreatedAt
+		m.DepartmentID = existing.DepartmentID
+		m.LevelID = existing.LevelID
+	}
+	if err := s.repo.AddMembership(ctx, m); err != nil {
+		return nil, err
+	}
+	return s.repo.GetMembership(ctx, orgID, userID)
+}
+
+// memberRoleDecision decides whether actorRole may set targetRole to nextRole.
+// An empty nextRole removes the membership. The owner role cannot be assigned here.
+func memberRoleDecision(actorRole, targetRole, nextRole string, ownerCount int) error {
+	actorRole = strings.ToLower(strings.TrimSpace(actorRole))
+	targetRole = strings.ToLower(strings.TrimSpace(targetRole))
+	nextRole = strings.ToLower(strings.TrimSpace(nextRole))
+	if actorRole != "owner" && actorRole != "admin" {
+		return ErrOrgForbidden
+	}
+	if nextRole == "owner" {
+		return ErrOrgRoleReserved
+	}
+	if targetRole == "owner" && nextRole != "owner" && ownerCount <= 1 {
+		return ErrLastOwner
+	}
+	if actorRole == "admin" && (targetRole == "owner" || targetRole == "admin" || nextRole == "admin") {
+		return ErrOrgForbidden
+	}
+	return nil
+}
+
+// ChangeMemberRole sets an active member's role. The actor must be an owner or admin.
+func (s *OrgService) ChangeMemberRole(ctx context.Context, slug string, actor, target uuid.UUID, role string) (*idp.OrganizationMembership, error) {
+	org, actorM, targetM, owners, err := s.memberChangeContext(ctx, slug, actor, target)
+	if err != nil {
+		return nil, err
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if err := memberRoleDecision(actorM.Role, targetM.Role, role, owners); err != nil {
+		return nil, err
+	}
+	ok, err := s.HasOrgRole(ctx, org.ID, role)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrInvalidOrgRole
+	}
+	if err := s.repo.UpdateMembershipRole(ctx, org.ID, target, role); err != nil {
+		return nil, err
+	}
+	return s.repo.GetMembership(ctx, org.ID, target)
+}
+
+// RemoveMember ends an active membership. The row stays so the person can be invited again.
+func (s *OrgService) RemoveMember(ctx context.Context, slug string, actor, target uuid.UUID) error {
+	org, actorM, targetM, owners, err := s.memberChangeContext(ctx, slug, actor, target)
+	if err != nil {
+		return err
+	}
+	if err := memberRoleDecision(actorM.Role, targetM.Role, "", owners); err != nil {
+		return err
+	}
+	n, err := s.repo.RemoveMembership(ctx, org.ID, target)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotOrgMember
+	}
+	return nil
+}
+
+func (s *OrgService) memberChangeContext(ctx context.Context, slug string, actor, target uuid.UUID) (*idp.Organization, *idp.OrganizationMembership, *idp.OrganizationMembership, int, error) {
+	org, err := s.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	actorM, err := s.RequireMember(ctx, org.ID, actor)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	targetM, err := s.RequireMember(ctx, org.ID, target)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	owners, err := s.repo.CountActiveRole(ctx, org.ID, "owner")
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	return org, actorM, targetM, owners, nil
+}
+
+// IsStaffMember reports whether the user holds an active membership in one of roles.
+func (s *OrgService) IsStaffMember(ctx context.Context, userID uuid.UUID, roles []string) (bool, error) {
+	if !s.enabled() || len(roles) == 0 {
+		return false, nil
+	}
+	normalized := make([]string, 0, len(roles))
+	for _, role := range roles {
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role != "" {
+			normalized = append(normalized, role)
+		}
+	}
+	if len(normalized) == 0 {
+		return false, nil
+	}
+	return s.repo.HasActiveRoleIn(ctx, userID, normalized)
+}
+
+// SetMemberRole changes the role of an existing active membership.
+func (s *OrgService) SetMemberRole(ctx context.Context, orgID, userID uuid.UUID, role string) (*idp.OrganizationMembership, error) {
+	existing, err := s.RequireMember(ctx, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrNotOrgMember
+	}
+	return s.AddMember(ctx, orgID, userID, role)
+}
+
 func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, email, role string, payload map[string]any) (rawToken string, inv *idp.OrganizationInvitation, err error) {
+	return s.invite(ctx, slug, &actor, email, role, payload, true)
+}
+
+// PlatformInvite writes an organization invitation without an acting member.
+// Hosts use it when the platform operator is not a member of the company.
+func (s *OrgService) PlatformInvite(ctx context.Context, slug, email, role string, payload map[string]any) (rawToken string, inv *idp.OrganizationInvitation, err error) {
+	return s.invite(ctx, slug, nil, email, role, payload, false)
+}
+
+func (s *OrgService) invite(ctx context.Context, slug string, actor *uuid.UUID, email, role string, payload map[string]any, checkActor bool) (rawToken string, inv *idp.OrganizationInvitation, err error) {
 	org, err := s.GetBySlug(ctx, slug)
 	if err != nil {
 		return "", nil, err
 	}
-	if _, err := s.RequireRole(ctx, org.ID, actor, "owner", "admin"); err != nil {
-		return "", nil, err
+	if checkActor {
+		if actor == nil || *actor == uuid.Nil {
+			return "", nil, ErrOrgForbidden
+		}
+		if _, err := s.RequireRole(ctx, org.ID, *actor, "owner", "admin"); err != nil {
+			return "", nil, err
+		}
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
@@ -273,7 +444,11 @@ func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, e
 		return "", nil, ErrInvalidOrgRole
 	}
 	if s.cfg.Hooks.OrgInvitePolicy != nil {
-		if err := s.cfg.Hooks.OrgInvitePolicy(ctx, actor, org.Slug, email, role); err != nil {
+		var policyActor uuid.UUID
+		if actor != nil {
+			policyActor = *actor
+		}
+		if err := s.cfg.Hooks.OrgInvitePolicy(ctx, policyActor, org.Slug, email, role); err != nil {
 			return "", nil, err
 		}
 	}
@@ -297,7 +472,7 @@ func (s *OrgService) Invite(ctx context.Context, slug string, actor uuid.UUID, e
 		TokenHash:      security.HashToken(rawToken),
 		Payload:        rawPayload,
 		ExpiresAt:      time.Now().Add(ttl),
-		InvitedBy:      &actor,
+		InvitedBy:      actor,
 		CreatedAt:      time.Now(),
 	}
 	if err := s.repo.CreateInvitation(ctx, inv); err != nil {

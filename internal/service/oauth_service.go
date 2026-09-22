@@ -125,6 +125,9 @@ type TokenAndUser struct {
 }
 
 func (s *OAuthService) finishSession(ctx context.Context, userID uuid.UUID, ipAddress, userAgent string) (*TokenAndUser, error) {
+	if u, err := s.userRepo.GetByID(ctx, userID); err == nil && u != nil && u.Status == "locked" {
+		return nil, ErrAccountLocked
+	}
 	token, sess, err := s.authSvc.CreateSession(ctx, userID, ipAddress, userAgent)
 	if err != nil {
 		return nil, err

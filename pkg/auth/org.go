@@ -22,6 +22,7 @@ var (
 	ErrOrgRoleExists     = service.ErrOrgRoleExists
 	ErrOrgNameTaken      = service.ErrOrgNameTaken
 	ErrOrgRoleReserved   = service.ErrOrgRoleReserved
+	ErrLastOwner         = service.ErrLastOwner
 	ErrInviteInvalid     = service.ErrInviteInvalid
 	ErrInviteRevoked     = service.ErrInviteRevoked
 	ErrInviteUsed        = service.ErrInviteUsed
@@ -181,6 +182,46 @@ func (a *Auth) RequireOrgMember(ctx context.Context, slug string, userID uuid.UU
 		return nil, err
 	}
 	return s.RequireMember(ctx, org.ID, userID)
+}
+
+func (a *Auth) AddOrganizationMember(ctx context.Context, orgID, userID uuid.UUID, role string) (*OrganizationMembership, error) {
+	s, err := a.orgSvc()
+	if err != nil {
+		return nil, err
+	}
+	return s.AddMember(ctx, orgID, userID, role)
+}
+
+func (a *Auth) UpdateOrgMemberRole(ctx context.Context, slug string, actor, target uuid.UUID, role string) (*OrganizationMembership, error) {
+	s, err := a.orgSvc()
+	if err != nil {
+		return nil, err
+	}
+	return s.ChangeMemberRole(ctx, slug, actor, target, role)
+}
+
+func (a *Auth) RemoveOrgMember(ctx context.Context, slug string, actor, target uuid.UUID) error {
+	s, err := a.orgSvc()
+	if err != nil {
+		return err
+	}
+	return s.RemoveMember(ctx, slug, actor, target)
+}
+
+func (a *Auth) SetOrganizationRole(ctx context.Context, orgID, userID uuid.UUID, role string) (*OrganizationMembership, error) {
+	s, err := a.orgSvc()
+	if err != nil {
+		return nil, err
+	}
+	return s.SetMemberRole(ctx, orgID, userID, role)
+}
+
+func (a *Auth) PlatformInvite(ctx context.Context, slug, email, role string, payload map[string]any) (rawToken string, inv *OrganizationInvitation, err error) {
+	s, err := a.orgSvc()
+	if err != nil {
+		return "", nil, err
+	}
+	return s.PlatformInvite(ctx, slug, email, role, payload)
 }
 
 func (a *Auth) RequireOrgRole(ctx context.Context, slug string, userID uuid.UUID, roles ...string) (*OrganizationMembership, error) {

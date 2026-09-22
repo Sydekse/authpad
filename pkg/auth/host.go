@@ -15,9 +15,11 @@ import (
 )
 
 var (
-	ErrNoSession   = errors.New("no session")
-	ErrMFARequired = errors.New("mfa verification required")
-	ErrEmailTaken  = service.ErrEmailTaken
+	ErrNoSession        = errors.New("no session")
+	ErrMFARequired      = errors.New("mfa verification required")
+	ErrEmailTaken       = service.ErrEmailTaken
+	ErrAccountLocked    = service.ErrAccountLocked
+	ErrAccountNotLocked = service.ErrAccountNotLocked
 )
 
 type Identity struct {

@@ -23,9 +23,9 @@ func NewSessionRepo(db *database.AuthDB) *SessionRepo {
 // Create inserts a session.
 func (r *SessionRepo) Create(ctx context.Context, s *auth.Session) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, created_at, expires_at, last_active_at, revoked, mfa_pending, active_organization_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, s.ID, s.UserID, s.TokenHash, s.IPAddress, s.UserAgent, s.CreatedAt, s.ExpiresAt, s.LastActiveAt, s.Revoked, s.MFAPending, s.ActiveOrganizationID)
+		INSERT INTO sessions (id, user_id, token_hash, ip_address, user_agent, created_at, expires_at, last_active_at, revoked, mfa_pending, active_organization_id, staff)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, s.ID, s.UserID, s.TokenHash, s.IPAddress, s.UserAgent, s.CreatedAt, s.ExpiresAt, s.LastActiveAt, s.Revoked, s.MFAPending, s.ActiveOrganizationID, s.Staff)
 	return err
 }
 
@@ -33,9 +33,9 @@ func (r *SessionRepo) Create(ctx context.Context, s *auth.Session) error {
 func (r *SessionRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*auth.Session, error) {
 	var s auth.Session
 	err := r.db.QueryRow(ctx, `
-		SELECT id, user_id, token_hash, COALESCE(ip_address::text, ''), COALESCE(user_agent, ''), created_at, expires_at, last_active_at, revoked, COALESCE(mfa_pending, false), active_organization_id
+		SELECT id, user_id, token_hash, COALESCE(ip_address::text, ''), COALESCE(user_agent, ''), created_at, expires_at, last_active_at, revoked, COALESCE(mfa_pending, false), active_organization_id, COALESCE(staff, false)
 		FROM sessions WHERE token_hash = $1 AND revoked = false AND expires_at > NOW()
-	`, tokenHash).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.LastActiveAt, &s.Revoked, &s.MFAPending, &s.ActiveOrganizationID)
+	`, tokenHash).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.LastActiveAt, &s.Revoked, &s.MFAPending, &s.ActiveOrganizationID, &s.Staff)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -69,7 +69,7 @@ func (r *SessionRepo) RevokeAllForUser(ctx context.Context, userID uuid.UUID) (i
 // ListByUserID returns active sessions for a user.
 func (r *SessionRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]auth.Session, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, user_id, token_hash, COALESCE(ip_address::text, ''), COALESCE(user_agent, ''), created_at, expires_at, last_active_at, revoked, COALESCE(mfa_pending, false), active_organization_id
+		SELECT id, user_id, token_hash, COALESCE(ip_address::text, ''), COALESCE(user_agent, ''), created_at, expires_at, last_active_at, revoked, COALESCE(mfa_pending, false), active_organization_id, COALESCE(staff, false)
 		FROM sessions WHERE user_id = $1 AND revoked = false AND expires_at > NOW() ORDER BY last_active_at DESC
 	`, userID)
 	if err != nil {
@@ -79,7 +79,7 @@ func (r *SessionRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]aut
 	var out []auth.Session
 	for rows.Next() {
 		var s auth.Session
-		if err := rows.Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.LastActiveAt, &s.Revoked, &s.MFAPending, &s.ActiveOrganizationID); err != nil {
+		if err := rows.Scan(&s.ID, &s.UserID, &s.TokenHash, &s.IPAddress, &s.UserAgent, &s.CreatedAt, &s.ExpiresAt, &s.LastActiveAt, &s.Revoked, &s.MFAPending, &s.ActiveOrganizationID, &s.Staff); err != nil {
 			return nil, err
 		}
 		out = append(out, s)

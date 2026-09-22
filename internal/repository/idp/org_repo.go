@@ -344,6 +344,45 @@ func (r *OrgRepo) DepartmentExists(ctx context.Context, orgID, id uuid.UUID) (bo
 	return exists, err
 }
 
+func (r *OrgRepo) UpdateMembershipRole(ctx context.Context, orgID, userID uuid.UUID, role string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE organization_memberships SET role = $3
+		WHERE organization_id = $1 AND user_id = $2 AND status = 'active'
+	`, orgID, userID, role)
+	return err
+}
+
+func (r *OrgRepo) RemoveMembership(ctx context.Context, orgID, userID uuid.UUID) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE organization_memberships SET status = 'removed'
+		WHERE organization_id = $1 AND user_id = $2 AND status = 'active'
+	`, orgID, userID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (r *OrgRepo) CountActiveRole(ctx context.Context, orgID uuid.UUID, role string) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM organization_memberships
+		WHERE organization_id = $1 AND status = 'active' AND lower(role) = lower($2)
+	`, orgID, role).Scan(&n)
+	return n, err
+}
+
+func (r *OrgRepo) HasActiveRoleIn(ctx context.Context, userID uuid.UUID, roles []string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM organization_memberships
+			WHERE user_id = $1 AND status = 'active' AND lower(role) = ANY($2)
+		)
+	`, userID, roles).Scan(&exists)
+	return exists, err
+}
+
 func (r *OrgRepo) LevelExists(ctx context.Context, orgID, id uuid.UUID) (bool, error) {
 	var exists bool
 	err := r.db.QueryRow(ctx, `

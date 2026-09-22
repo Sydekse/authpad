@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -182,6 +183,69 @@ func (h *AdminHandlers) GetAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
+}
+
+func (h *AdminHandlers) LockUser(w http.ResponseWriter, r *http.Request) {
+	actor, ok := isAdmin(r, h.Cfg, h.Auth, h.IdP)
+	if !ok {
+		apierror.Forbidden(w, "FORBIDDEN", "Admin role required")
+		return
+	}
+	target, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid user ID")
+		return
+	}
+	if actor != uuid.Nil && actor == target {
+		apierror.BadRequest(w, "CANNOT_LOCK_SELF", "You cannot lock your own account")
+		return
+	}
+	if err := h.Auth.LockUser(r.Context(), target); err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			apierror.NotFound(w, "USER_NOT_FOUND", "User not found")
+			return
+		}
+		apierror.Internal(w, "LOCK_FAILED", "Could not lock account")
+		return
+	}
+	if h.Audit != nil {
+		uid := target
+		h.Audit.LogAuth(r.Context(), &uid, "account.lock", parseIPFromRemote(r), r.Header.Get("User-Agent"), map[string]any{
+			"actor": actor.String(),
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AdminHandlers) UnlockUser(w http.ResponseWriter, r *http.Request) {
+	actor, ok := isAdmin(r, h.Cfg, h.Auth, h.IdP)
+	if !ok {
+		apierror.Forbidden(w, "FORBIDDEN", "Admin role required")
+		return
+	}
+	target, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid user ID")
+		return
+	}
+	if err := h.Auth.UnlockUser(r.Context(), target); err != nil {
+		switch {
+		case errors.Is(err, service.ErrUserNotFound):
+			apierror.NotFound(w, "USER_NOT_FOUND", "User not found")
+		case errors.Is(err, service.ErrAccountNotLocked):
+			apierror.BadRequest(w, "ACCOUNT_NOT_LOCKED", "Account is not locked")
+		default:
+			apierror.Internal(w, "UNLOCK_FAILED", "Could not unlock account")
+		}
+		return
+	}
+	if h.Audit != nil {
+		uid := target
+		h.Audit.LogAuth(r.Context(), &uid, "account.unlock", parseIPFromRemote(r), r.Header.Get("User-Agent"), map[string]any{
+			"actor": actor.String(),
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AdminHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {

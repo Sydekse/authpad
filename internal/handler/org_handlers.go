@@ -34,6 +34,8 @@ func writeOrgErr(w http.ResponseWriter, err error) {
 		apierror.BadRequest(w, "ORG_INVALID", err.Error())
 	case errors.Is(err, service.ErrOrgRoleExists):
 		apierror.Conflict(w, "ROLE_EXISTS", err.Error())
+	case errors.Is(err, service.ErrLastOwner):
+		apierror.Conflict(w, "LAST_OWNER", err.Error())
 	default:
 		apierror.Internal(w, "ORG_FAILED", err.Error())
 	}
@@ -123,6 +125,52 @@ func (h *OrgHandlers) Members(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"members": members})
+}
+
+func (h *OrgHandlers) PatchMember(w http.ResponseWriter, r *http.Request) {
+	actor, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	target, err := uuid.Parse(chi.URLParam(r, "userId"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid user ID")
+		return
+	}
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(body.Role) == "" {
+		apierror.BadRequest(w, "ORG_INVALID", "role is required")
+		return
+	}
+	member, err := h.Orgs.ChangeMemberRole(r.Context(), chi.URLParam(r, "slug"), *actor, target, body.Role)
+	if err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, member)
+}
+
+func (h *OrgHandlers) DeleteMember(w http.ResponseWriter, r *http.Request) {
+	actor, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	target, err := uuid.Parse(chi.URLParam(r, "userId"))
+	if err != nil {
+		apierror.BadRequest(w, "INVALID_ID", "Invalid user ID")
+		return
+	}
+	if err := h.Orgs.RemoveMember(r.Context(), chi.URLParam(r, "slug"), *actor, target); err != nil {
+		writeOrgErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *OrgHandlers) Invite(w http.ResponseWriter, r *http.Request) {

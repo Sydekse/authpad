@@ -11,7 +11,7 @@ type UserAuth struct {
 	ID            uuid.UUID  `json:"id"`
 	Email         string     `json:"email"`
 	EmailVerified bool       `json:"email_verified"`
-	Status        string     `json:"status"` // active, suspended, pending_deletion
+	Status        string     `json:"status"` // active, suspended, pending_deletion, locked
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
@@ -41,6 +41,8 @@ type Session struct {
 	Revoked              bool       `json:"revoked"`
 	MFAPending           bool       `json:"mfa_pending,omitempty"`
 	ActiveOrganizationID *uuid.UUID `json:"active_organization_id,omitempty"`
+	// Staff sessions use SessionConfig.StaffIdleTimeout when that limit is set.
+	Staff bool `json:"staff,omitempty"`
 }
 
 // OAuthAccount is a linked OAuth provider account (Auth DB).

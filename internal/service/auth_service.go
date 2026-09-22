@@ -24,7 +24,12 @@ var (
 	ErrEmailNotVerified     = errors.New("email not verified")
 	ErrVerifyTokenInvalid   = errors.New("verification token invalid or expired")
 	ErrWeakPassword         = errors.New("password does not meet policy")
+	ErrAccountLocked        = errors.New("account locked")
+	ErrAccountNotLocked     = errors.New("account is not locked")
 )
+
+// StaffFunc reports whether a user should receive the shorter staff idle timeout.
+type StaffFunc func(ctx context.Context, userID uuid.UUID) (bool, error)
 
 // AuthService handles authentication (Auth DB only).
 type AuthService struct {
@@ -39,6 +44,7 @@ type AuthService struct {
 	passwordPolicy      apptypes.PasswordPolicy
 	requireVerification bool
 	resetTokenTTL       time.Duration
+	staff               StaffFunc
 }
 
 func NewAuthService(
@@ -116,6 +122,77 @@ func (s *AuthService) CreateUserAuth(ctx context.Context, userID uuid.UUID, emai
 	return s.userRepo.Create(ctx, u)
 }
 
+// SetStaffFunc classifies users when a session is created. Nil means nobody is staff.
+func (s *AuthService) SetStaffFunc(fn StaffFunc) {
+	if s == nil {
+		return
+	}
+	s.staff = fn
+}
+
+// SetStatus sets users_auth.status. Allowed: active, suspended, pending_deletion, locked.
+func (s *AuthService) SetStatus(ctx context.Context, userID uuid.UUID, status string) error {
+	switch status {
+	case "active", "suspended", "pending_deletion", "locked":
+	default:
+		return fmt.Errorf("invalid status %q", status)
+	}
+	return s.userRepo.UpdateStatus(ctx, userID, status, nil)
+}
+
+// LockUser marks the account locked and revokes every session.
+func (s *AuthService) LockUser(ctx context.Context, userID uuid.UUID) error {
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u == nil || u.DeletedAt != nil {
+		return ErrUserNotFound
+	}
+	if err := s.SetStatus(ctx, userID, "locked"); err != nil {
+		return err
+	}
+	_, err = s.RevokeAllSessionsForUser(ctx, userID)
+	return err
+}
+
+// UnlockUser returns a locked account to active. It does not clear suspension.
+func (s *AuthService) UnlockUser(ctx context.Context, userID uuid.UUID) error {
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u == nil || u.DeletedAt != nil {
+		return ErrUserNotFound
+	}
+	if u.Status != "locked" {
+		return ErrAccountNotLocked
+	}
+	return s.SetStatus(ctx, userID, "active")
+}
+
+// ImportCredential stores an already-encoded password hash (argon2id or bcrypt) without rehashing.
+func (s *AuthService) ImportCredential(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+	if strings.TrimSpace(passwordHash) == "" {
+		return ErrInvalidCredentials
+	}
+	now := time.Now()
+	version := 2
+	if strings.HasPrefix(passwordHash, "$2") {
+		version = 1
+	}
+	c := &auth.Credential{
+		ID:             uuid.New(),
+		UserID:         userID,
+		CredentialType: "password",
+		PasswordHash:   passwordHash,
+		HashVersion:    version,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	return s.credRepo.Create(ctx, c)
+}
+
 func (s *AuthService) CreateCredential(ctx context.Context, userID uuid.UUID, plainPassword string) error {
 	if err := s.ValidatePasswordPolicy(plainPassword); err != nil {
 		return err
@@ -142,15 +219,18 @@ func (s *AuthService) ValidatePassword(ctx context.Context, email, password stri
 	if err != nil || u == nil {
 		return nil, ErrInvalidCredentials
 	}
-	if u.Status != "active" {
-		return nil, ErrInvalidCredentials
-	}
 	cred, err := s.credRepo.GetByUserID(ctx, u.ID)
 	if err != nil || cred == nil {
 		return nil, ErrInvalidCredentials
 	}
 	ok, err := s.password.Verify(password, cred.PasswordHash)
 	if err != nil || !ok {
+		return nil, ErrInvalidCredentials
+	}
+	if u.Status == "locked" {
+		return nil, ErrAccountLocked
+	}
+	if u.Status != "active" {
 		return nil, ErrInvalidCredentials
 	}
 	if s.requireVerification && !u.EmailVerified {
@@ -191,6 +271,10 @@ func (s *AuthService) CreateSessionWithTTL(ctx context.Context, userID uuid.UUID
 	if s.sessionCfg.MaxLifetime > 0 && ttl <= s.sessionCfg.MaxLifetime && expiresAt.After(now.Add(s.sessionCfg.MaxLifetime)) {
 		expiresAt = now.Add(s.sessionCfg.MaxLifetime)
 	}
+	staff, err := s.sessionIsStaff(ctx, userID)
+	if err != nil {
+		return "", nil, err
+	}
 	sess = &auth.Session{
 		ID:           uuid.New(),
 		UserID:       userID,
@@ -201,6 +285,7 @@ func (s *AuthService) CreateSessionWithTTL(ctx context.Context, userID uuid.UUID
 		ExpiresAt:    expiresAt,
 		LastActiveAt: now,
 		Revoked:      false,
+		Staff:        staff,
 	}
 	if err := s.sessionRepo.Create(ctx, sess); err != nil {
 		return "", nil, err
@@ -221,9 +306,14 @@ func (s *AuthService) GetSessionByToken(ctx context.Context, token string) (*aut
 	if sess == nil {
 		return nil, ErrSessionNotFound
 	}
-	// Remember-me sessions (≈30d lifetime) ignore idle timeout and only expire at expires_at.
+	if u, err := s.userRepo.GetByID(ctx, sess.UserID); err == nil && u != nil && u.Status == "locked" {
+		_ = s.sessionRepo.RevokeByID(ctx, sess.ID)
+		return nil, ErrAccountLocked
+	}
+	// Remember-me sessions (≈30d lifetime) ignore the normal idle timeout.
+	// Staff sessions still use StaffIdleTimeout.
 	rememberMe := sess.ExpiresAt.Sub(sess.CreatedAt) >= 20*24*time.Hour
-	if !rememberMe && s.sessionCfg.IdleTimeout > 0 && time.Since(sess.LastActiveAt) > s.sessionCfg.IdleTimeout {
+	if limit := sessionIdleLimit(s.sessionCfg, sess.Staff, rememberMe); limit > 0 && time.Since(sess.LastActiveAt) > limit {
 		_ = s.sessionRepo.RevokeByID(ctx, sess.ID)
 		return nil, ErrSessionNotFound
 	}
@@ -363,4 +453,23 @@ func (s *AuthService) SetSessionActiveOrganization(ctx context.Context, sessionI
 
 func (s *AuthService) PasswordService() *security.PasswordService {
 	return s.password
+}
+
+func (s *AuthService) sessionIsStaff(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if s == nil || s.staff == nil {
+		return false, nil
+	}
+	return s.staff(ctx, userID)
+}
+
+// sessionIdleLimit is the idle window for a session. Zero means idle does not apply.
+// Staff sessions use StaffIdleTimeout even when remember-me would otherwise skip idle.
+func sessionIdleLimit(cfg apptypes.SessionConfig, staff, rememberMe bool) time.Duration {
+	if staff && cfg.StaffIdleTimeout > 0 {
+		return cfg.StaffIdleTimeout
+	}
+	if rememberMe {
+		return 0
+	}
+	return cfg.IdleTimeout
 }

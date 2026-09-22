@@ -19,6 +19,7 @@ func LoadFromEnv() Config {
 	cfg.Session.CookieSecure = os.Getenv("COOKIE_SECURE") == "true" || cfg.Env == "production"
 	cfg.Session.TTL = getEnvDuration("SESSION_TTL", 7*24*time.Hour)
 	cfg.Session.IdleTimeout = getEnvDuration("SESSION_IDLE_TIMEOUT", 24*time.Hour)
+	cfg.Session.StaffIdleTimeout = getEnvDuration("SESSION_STAFF_IDLE_TIMEOUT", 0)
 	cfg.Session.MaxLifetime = getEnvDuration("SESSION_MAX_LIFETIME", 30*24*time.Hour)
 	cfg.Session.RememberMeTTL = getEnvDuration("SESSION_REMEMBER_TTL", 30*24*time.Hour)
 
@@ -96,6 +97,14 @@ func LoadFromEnv() Config {
 	cfg.Tenancy.RequireOnSignup = os.Getenv("AUTHPAD_TENANCY_REQUIRE_ON_SIGNUP") == "true"
 	cfg.Tenancy.MaxMembershipsPerUser = getEnvInt("AUTHPAD_TENANCY_MAX_MEMBERSHIPS", 0)
 	cfg.Tenancy.DefaultOrgRole = getEnv("AUTHPAD_TENANCY_DEFAULT_ORG_ROLE", "member")
+	if raw := strings.TrimSpace(os.Getenv("AUTHPAD_TENANCY_STAFF_ROLES")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(strings.ToLower(part))
+			if part != "" {
+				cfg.Tenancy.StaffOrgRoles = append(cfg.Tenancy.StaffOrgRoles, part)
+			}
+		}
+	}
 	if keys := os.Getenv("AUTHPAD_TENANCY_ORG_PRIVATE_FIELDS"); keys != "" {
 		for _, k := range strings.Split(keys, ",") {
 			k = strings.TrimSpace(k)

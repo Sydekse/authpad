@@ -8,10 +8,13 @@ import (
 )
 
 type SessionConfig struct {
-	TTL            time.Duration
-	IdleTimeout    time.Duration
-	MaxLifetime    time.Duration
-	RotateInterval time.Duration
+	TTL         time.Duration
+	IdleTimeout time.Duration
+	// StaffIdleTimeout replaces IdleTimeout for sessions marked staff.
+	// Zero keeps the normal idle timeout. Staff sessions still idle out when remember-me is on.
+	StaffIdleTimeout time.Duration
+	MaxLifetime      time.Duration
+	RotateInterval   time.Duration
 	// RememberMeTTL is used when the client requests "remember me" on login.
 	RememberMeTTL time.Duration
 	CookieDomain  string
@@ -172,6 +175,9 @@ type TenancyConfig struct {
 	MaxMembershipsPerUser   int
 	DefaultOrgRole          string
 	OrgRoles                []RoleDefinition
+	// StaffOrgRoles are organization roles that receive StaffIdleTimeout.
+	// Empty defaults to owner and admin. The global admin role is always staff.
+	StaffOrgRoles []string
 	// OrgPrivateMetadataKeys are profile metadata fields that must not be
 	// returned unless the request has an active organization.
 	OrgPrivateMetadataKeys []string

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,6 +64,14 @@ func (h *OAuthHandlers) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	redirectURI, result, err := h.OAuth.Callback(r.Context(), provider, code, state, callbackBaseURL, ip, ua)
 	if err != nil {
 		log.Warn().Err(err).Str("provider", provider).Msg("oauth callback")
+		if errors.Is(err, service.ErrAccountLocked) {
+			if h.Cfg.Pages.ErrorURL != "" {
+				http.Redirect(w, r, h.Cfg.Pages.ErrorURL+"?error=account_locked", http.StatusFound)
+				return
+			}
+			apierror.Forbidden(w, "ACCOUNT_LOCKED", "This account is locked. Contact an administrator.")
+			return
+		}
 		if h.Cfg.Pages.ErrorURL != "" {
 			http.Redirect(w, r, h.Cfg.Pages.ErrorURL+"?error=oauth_failed", http.StatusFound)
 			return
