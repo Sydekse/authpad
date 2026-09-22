@@ -5,7 +5,7 @@ authpad is an embeddable Go authentication library (better-auth-style) with opti
 ## Install
 
 ```bash
-go get github.com/Sydekse/authpad
+go get github.com/Sydekse/authpad@v0.3.0
 ```
 
 ## Quick start
@@ -36,12 +36,21 @@ Or run the reference server:
 go run ./cmd/example
 ```
 
+Same-database auth + IdP ledgers:
+
+```go
+err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
+    AuthTable: "schema_migrations_auth",
+    IdPTable:  "schema_migrations_idp",
+})
+```
+
 ## Required configuration
 
 | Field | Description |
 |-------|-------------|
 | `AUTH_DATABASE_URL` | PostgreSQL URL for auth tables |
-| `IDP_DATABASE_URL` | PostgreSQL URL for profile/roles (optional but recommended) |
+| `IDP_DATABASE_URL` | PostgreSQL URL for profile/roles (optional but recommended; defaults to the auth DSN) |
 | `SESSION_SECRET` | Required in production (32+ chars) |
 
 ## Developer-defined roles
@@ -56,6 +65,8 @@ cfg.Roles = []auth.RoleDefinition{
 ```
 
 Roles are seeded at startup (no hardcoded SQL seeds).
+
+Those `Config.Roles` are **global** IdP roles. Organization roles (`owner` / `admin` / `member`, plus any you add per org) are a separate catalog — see [tenancy.md](tenancy.md).
 
 ## Custom profile schema
 
@@ -82,9 +93,11 @@ Signup body:
 }
 ```
 
-Custom fields are stored in `users_profile.metadata` JSONB and validated at runtime.
+Custom fields are stored in `users_profile.metadata` JSONB and validated at runtime. See [schema.md](schema.md).
 
 ## Optional company tenancy
+
+Requires IdP. Off by default.
 
 ```go
 cfg.Tenancy.Enabled = true
@@ -93,13 +106,13 @@ cfg.Tenancy.AllowPersonalAccounts = true
 cfg.Tenancy.MaxMembershipsPerUser = 0 // unlimited; use 1 for single-home
 ```
 
-Mounted when enabled: `POST/GET /organizations`, members, per-org roles/departments/levels, org invites, `POST /session/organization`.
+Mounted when enabled: `POST/GET /organizations`, members (including `PATCH`/`DELETE` to change or remove a role), per-org roles/departments/levels, org invites, `POST /session/organization`.
 
-Each organization has its own role catalog (seeded `owner`/`admin`/`member`), departments, and levels. `Tenancy.OrgRoles` is the seed list for new orgs, not a process-wide allowlist.
+Each organization has its own role catalog (seeded `owner`/`admin`/`member`), departments, and levels. `Tenancy.OrgRoles` is the seed list for new orgs, not a process-wide allowlist. Seed a platform company with `EnsureOrganization`.
 
 Company-mode signup (`RequireOnSignup`) must create an organization (`organization_name`) or accept `org_invite_token`. Session and `/account` include `organization` and `org_role` when an org is active.
 
-Hosts that already register overlapping routes should set `cfg.SkipHTTPPaths` (for example `"/admin/roles"`) instead of depending on chi match order.
+Full HTTP table, invite payload, and host helpers: [tenancy.md](tenancy.md).
 
 ## Replacing public signup
 
@@ -109,5 +122,4 @@ r.Post("/api/v1/auth/signup", mySignup)
 a.Mount(r, "/api/v1")
 ```
 
-Use `a.CreateAccount` and `a.AssignRole` in `mySignup`.
-
+Use `a.CreateAccount` and `a.AssignRole` in `mySignup`. If the signup form includes a company, call `CreateOrganization` then `SwitchActiveOrganization`. Overlapping host routes should be listed in `cfg.SkipHTTPPaths` (for example `"/admin/roles"`).

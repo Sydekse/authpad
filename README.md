@@ -9,16 +9,19 @@ This is the public starter pack for running your own Go auth service. Sydek’s 
 ## Features
 
 - Email/password auth, opaque sessions (cookie + Bearer), OAuth (Google/GitHub)
-- Developer-defined profile schema and seeded roles
+- Developer-defined profile schema and seeded **global** roles
 - Hosted-page redirect model (no bundled UI)
 - Audit logs, email verification, CSRF, rate limits, TOTP MFA
-- Optional invitations and workspace-style organizations
+- Optional generic invitations (`AUTHPAD_INVITATIONS_ENABLED`)
+- Optional company tenancy (v0.2.0): organizations, memberships, **per-org** roles / departments / levels, org invites with JSON payload, change or remove a member’s role
+- Account lock with admin unlock (`POST /admin/users/{id}/lock` and `/unlock`)
+- Optional shorter idle timeout for staff sessions (`SESSION_STAFF_IDLE_TIMEOUT`)
 - Embedded PostgreSQL migrations
 
 ## Install
 
 ```bash
-go get github.com/Sydekse/authpad
+go get github.com/Sydekse/authpad@v0.3.0
 ```
 
 ## Quick start
@@ -53,15 +56,17 @@ err := auth.MigrateWithOptions(ctx, dsn, dsn, auth.MigrationOptions{
 
 Off by default. Enable with `AUTHPAD_TENANCY_ENABLED=true` or `cfg.Tenancy.Enabled = true` (requires IdP). Users can belong to many organizations, switch `active_organization_id` on the session, and hold **per-org** roles (seeded `owner`, `admin`, `member`; hosts may add more). Each organization also has its own departments and levels. Set `MaxMembershipsPerUser: 1` for single-home products. Hosts can seed an org with `EnsureOrganization`.
 
+HTTP, invite payload, and `OrgInvitePolicy`: [docs/tenancy.md](docs/tenancy.md).
+
 ## Invitations
 
-Enable with `AUTHPAD_INVITATIONS_ENABLED=true`. Hosts that already implement invites (for example Sydek auth-service) should leave this off.
+Enable with `AUTHPAD_INVITATIONS_ENABLED=true`. That is the **generic** `/admin/invitations` table, not organization invitations. Hosts that already implement invites, or that use org invites instead, should leave this off.
 
 ## Host API
 
-Wrappers should use `IdentityFromRequest`, `CreateAccount`, `AssignRole`, `SetSessionCookie`, `CSRF`, and `HashToken` instead of copying internals. Overlapping host routes should be listed in `SkipHTTPPaths`.
+Wrappers should use `IdentityFromRequest`, `CreateAccount`, `AssignRole`, `SetSessionCookie`, `CSRF`, and `HashToken` instead of copying internals. With tenancy on, also `EnsureOrganization`, org structure CRUD, invite/accept, and `RequireOrgMember` / `RequireOrgRole`. Overlapping host routes should be listed in `SkipHTTPPaths`.
 
-See [docs/getting-started.md](docs/getting-started.md).
+See [docs/getting-started.md](docs/getting-started.md) and [docs/host-api.md](docs/host-api.md).
 
 ## License
 

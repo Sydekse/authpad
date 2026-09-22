@@ -33,9 +33,21 @@ Enable with `REQUIRE_EMAIL_VERIFICATION=true`. Unverified users cannot log in wh
 Configure via env or `SessionConfig`:
 
 - `SESSION_TTL` — default session lifetime
-- `SESSION_IDLE_TIMEOUT` — revoke after inactivity
+- `SESSION_IDLE_TIMEOUT` — revoke after inactivity (remember-me skips this)
+- `SESSION_STAFF_IDLE_TIMEOUT` — shorter idle for staff sessions. Zero disables it. Remember-me does not skip it
+- `AUTHPAD_TENANCY_STAFF_ROLES` — org roles treated as staff (default `owner`, `admin`). The global admin role is always staff
 - `SESSION_MAX_LIFETIME` — absolute cap
 - Session rotation on interval (when configured)
+
+Account lock (global admin, `AdminRoleName`):
+
+- `POST /api/v1/admin/users/{id}/lock` — status `locked`, all sessions revoked. An admin cannot lock themselves
+- `POST /api/v1/admin/users/{id}/unlock` — only when status is `locked` (does not clear `suspended`)
+- Password login with the correct password returns `403 ACCOUNT_LOCKED`. A wrong password stays `INVALID_CREDENTIALS`
+- OAuth for a locked account fails with `account_locked`
+- A leftover session is revoked on the next request
+
+Host helpers: `LockAccount`, `UnlockAccount`. `SetUserStatus` also accepts `locked`.
 
 Device management:
 

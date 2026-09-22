@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Account lock: `POST /admin/users/{id}/lock` and `/unlock`. Locked password and OAuth sign-in return `ACCOUNT_LOCKED`. Unlock only clears `locked`, not `suspended`.
+- Organization owners and admins can change or remove an existing member’s role (`PATCH` / `DELETE /organizations/{slug}/members/{userId}`). The last owner cannot be removed. Admins cannot change owners or admins, or assign `admin`.
+- `SESSION_STAFF_IDLE_TIMEOUT` and `Tenancy.StaffOrgRoles`. Staff sessions idle out on that window, including remember-me. Zero leaves the normal idle timeout.
+- Password verify accepts imported bcrypt hashes (`$2a$`, `$2b$`, `$2y$`).
+- Host helpers for login, MFA, account import, status, and session revoke (`LockAccount`, `UnlockAccount`, `Login`, `ImportAccount`, and related calls).
+
 ## 0.2.0
 
 - Per-organization roles, departments, and levels

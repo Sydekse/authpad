@@ -39,7 +39,9 @@ cfg.ProfileSchema = auth.ProfileSchema{
 
 ## Roles
 
-Roles are not part of the profile schema. Define them via `Config.Roles` and assign with:
+There are two catalogs:
 
-- `POST /api/v1/account/role` (self-service, allowed roles only)
-- `POST /api/v1/admin/roles/assign` (admin only)
+- **Global** IdP roles (`Config.Roles`, `user_roles`) — assign with `POST /api/v1/account/role` (self-service, allowed names only) or `POST /api/v1/admin/roles/assign` (admin).
+- **Organization** roles (`organization_roles` on each org) — seeded `owner` / `admin` / `member`; add more with `POST /organizations/{slug}/roles`. Membership `role` must exist on **that org**.
+
+Do not use a profile metadata field as a substitute for either catalog. See [tenancy.md](tenancy.md).
