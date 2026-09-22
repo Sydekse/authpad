@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -77,7 +79,18 @@ func (ps *PasswordService) Hash(password string) (string, error) {
 }
 
 // Verify checks the password against the stored encoded hash. Uses constant-time comparison.
+// Bcrypt hashes ($2a$/$2b$/$2y$) are accepted so a host can import an existing credential store.
 func (ps *PasswordService) Verify(password, encodedHash string) (bool, error) {
+	if strings.HasPrefix(encodedHash, "$2a$") || strings.HasPrefix(encodedHash, "$2b$") || strings.HasPrefix(encodedHash, "$2y$") {
+		err := bcrypt.CompareHashAndPassword([]byte(encodedHash), []byte(password))
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return false, nil
+		}
+		return false, err
+	}
 	hash, salt, params, err := ps.decode(encodedHash)
 	if err != nil {
 		return false, err
