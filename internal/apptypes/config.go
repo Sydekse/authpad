@@ -40,6 +40,10 @@ type SecurityConfig struct {
 	RedisURL       string
 	CSRFEnabled    bool
 	PasswordPolicy PasswordPolicy
+	// TrustedProxyCIDRs lists the reverse proxies (CIDRs or single IPs) whose
+	// X-Forwarded-For header is believed. Empty means the header is ignored and
+	// the connection's remote address is the client address.
+	TrustedProxyCIDRs []string
 }
 
 type PagesConfig struct {
@@ -94,12 +98,18 @@ type MagicLinkConfig struct {
 	// CodeFlow makes verify hand the session over with a one-time code in the
 	// redirect instead of an authpad cookie, for apps on another registrable
 	// domain. The app redeems the code server-to-server at POST /magic-link/exchange.
+	// Requires a redirect destination (DefaultRedirectURL or Pages.CallbackURL),
+	// and POST /magic-link must carry a PKCE code_challenge.
 	CodeFlow bool
 	// ExchangeSecret authenticates POST /magic-link/exchange (header
 	// X-Authpad-Exchange-Secret). Empty disables the endpoint.
 	ExchangeSecret string
 	// ExchangeLimit is the per-IP exchange attempts per minute (0 disables).
 	ExchangeLimit int
+	// AllowPasswordAccounts lets accounts that have a password credential sign in
+	// by magic link. Off by default: such accounts are refused (staff and admin
+	// accounts are always refused).
+	AllowPasswordAccounts bool
 	// Mailer overrides the built-in Resend / dev-log mailer (tests, hosts).
 	Mailer MagicLinkMailer
 }

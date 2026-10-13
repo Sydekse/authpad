@@ -36,19 +36,14 @@ type SessionInfo struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-func parseIPFromRemote(r *http.Request) string {
-	raw := r.RemoteAddr
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		raw = strings.TrimSpace(strings.Split(xff, ",")[0])
+// clientIP is the caller's address. X-Forwarded-For is trusted only when
+// Security.TrustedProxyCIDRs is set and the peer is inside it.
+func clientIP(r *http.Request, cfg *apptypes.AppConfig) string {
+	var nets []*net.IPNet
+	if cfg != nil {
+		nets, _ = apptypes.ParseCIDRs(cfg.Security.TrustedProxyCIDRs)
 	}
-	host, _, err := net.SplitHostPort(raw)
-	if err != nil {
-		if net.ParseIP(raw) != nil {
-			return raw
-		}
-		return ""
-	}
-	return host
+	return security.ClientIP(r, nets)
 }
 
 func getSessionToken(r *http.Request, cfg *apptypes.AppConfig) string {

@@ -2,10 +2,14 @@ package auth_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,9 +87,17 @@ func newMagicEnvWith(t *testing.T, tweak func(*auth.Config)) *magicEnv {
 	return e
 }
 
+// testCodeVerifier is the RFC 7636 appendix B example verifier.
+const testCodeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+func pkceChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func (e *magicEnv) request(t *testing.T, email, tenant, redirect string) (int, string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"email":%q,"tenant":%q,"redirect_to":%q}`, email, tenant, redirect)
+	body := fmt.Sprintf(`{"email":%q,"tenant":%q,"redirect_to":%q,"code_challenge":%q}`, email, tenant, redirect, pkceChallenge(testCodeVerifier))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/magic-link", strings.NewReader(body))
 	req.RemoteAddr = "203.0.113.9:4000"
 	rec := httptest.NewRecorder()
@@ -113,9 +125,35 @@ func (e *magicEnv) issue(t *testing.T, email, tenant, redirect string) (string, 
 	}
 }
 
-func (e *magicEnv) verify(path string) *httptest.ResponseRecorder {
+var hiddenInput = regexp.MustCompile(`<input type="hidden" name="([a-z]+)" value="([^"]*)">`)
+
+// page loads the GET interstitial for a link (which never consumes the token).
+func (e *magicEnv) page(path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.RemoteAddr = "203.0.113.9:4000"
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	return rec
+}
+
+// verify does what the browser does: GET the interstitial, then submit its form.
+// It returns the GET response when no form was served (bad link), else the POST's.
+func (e *magicEnv) verify(path string) *httptest.ResponseRecorder {
+	page := e.page(path)
+	if page.Code != http.StatusOK {
+		return page
+	}
+	form := url.Values{}
+	for _, m := range hiddenInput.FindAllStringSubmatch(page.Body.String(), -1) {
+		form.Set(m[1], html.UnescapeString(m[2]))
+	}
+	u, _ := url.Parse(path)
+	req := httptest.NewRequest(http.MethodPost, u.Path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "203.0.113.9:4000"
+	for _, c := range page.Result().Cookies() {
+		req.AddCookie(c)
+	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec
@@ -323,7 +361,7 @@ func TestMagicLinkEnumerationIdenticalResponses(t *testing.T) {
 }
 
 func TestMagicLinkExistingUserKeepsAccountAndActivatesOrg(t *testing.T) {
-	e := newMagicEnv(t)
+	e := newMagicEnvWith(t, func(c *auth.Config) { c.MagicLink.AllowPasswordAccounts = true })
 	ctx := context.Background()
 	email := strings.ToLower(uniqueEmail())
 	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Profile: map[string]any{"name": "Test User"}, Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
@@ -355,7 +393,7 @@ func TestMagicLinkExistingUserKeepsAccountAndActivatesOrg(t *testing.T) {
 }
 
 func TestMagicLinkLockedAccountRejected(t *testing.T) {
-	e := newMagicEnv(t)
+	e := newMagicEnvWith(t, func(c *auth.Config) { c.MagicLink.AllowPasswordAccounts = true })
 	ctx := context.Background()
 	email := strings.ToLower(uniqueEmail())
 	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Profile: map[string]any{"name": "Test User"}, Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
@@ -378,5 +416,169 @@ func TestMagicLinkMalformedBodyIs400(t *testing.T) {
 	e.h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+// F5: following the emailed link (a scanner or prefetcher) must not burn it.
+func TestMagicLinkGETDoesNotConsume(t *testing.T) {
+	e := newMagicEnv(t)
+	token, path := e.issue(t, uniqueEmail(), e.org.Slug, "")
+	for i := 0; i < 3; i++ {
+		rec := e.page(path)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `method="post"`) || len(rec.Result().Cookies()) != 1 {
+			t.Fatalf("GET = %d cookies=%v", rec.Code, rec.Result().Cookies())
+		}
+		if rec.Header().Get("Referrer-Policy") != "no-referrer" {
+			t.Fatal("missing Referrer-Policy")
+		}
+	}
+	if n := e.count(t, `SELECT count(*) FROM magic_link_tokens WHERE token_hash = $1 AND consumed_at IS NULL`, auth.HashToken(token)); n != 1 {
+		t.Fatal("GET consumed the token")
+	}
+	if rec := e.verify(path); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST after GETs = %d", rec.Code)
+	}
+}
+
+// A POST without the browser's nonce cookie (cross-site form post) is refused.
+func TestMagicLinkPOSTWithoutNonceRefused(t *testing.T) {
+	e := newMagicEnv(t)
+	token, _ := e.issue(t, uniqueEmail(), e.org.Slug, "")
+	form := url.Values{"token": {token}, "tenant": {e.org.Slug}, "nonce": {"forged"}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/magic-link/verify", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST without nonce cookie = %d", rec.Code)
+	}
+	if n := e.count(t, `SELECT count(*) FROM magic_link_tokens WHERE token_hash = $1 AND consumed_at IS NULL`, auth.HashToken(token)); n != 1 {
+		t.Fatal("token consumed by a request without the nonce")
+	}
+}
+
+func (e *magicEnv) createAccount(t *testing.T, email string, verified bool, skipSession bool) *auth.CreateAccountResult {
+	t.Helper()
+	res, err := e.a.CreateAccount(context.Background(), auth.CreateAccountRequest{
+		Profile: map[string]any{"name": "Test User"}, Email: email, Password: "password1",
+		EmailVerified: verified, SkipSession: skipSession,
+	}, "127.0.0.1", "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.conn.Exec(context.Background(), `UPDATE users_auth SET email_verified = $2 WHERE id = $1`, res.UserID, verified); err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// F2: accounts with a password, and staff/admin accounts, are refused with the
+// generic failure and the token is still single-use-consumed like any other.
+func TestMagicLinkRefusesPasswordAndStaffAccounts(t *testing.T) {
+	e := newMagicEnv(t)
+	ctx := context.Background()
+
+	pw := strings.ToLower(uniqueEmail())
+	e.createAccount(t, pw, true, true)
+	_, path := e.issue(t, pw, e.org.Slug, "")
+	if rec := e.verify(path); rec.Code != http.StatusBadRequest || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("password account = %d cookies=%v", rec.Code, rec.Result().Cookies())
+	}
+
+	// Staff: an org owner/admin, even without a password.
+	staff := strings.ToLower(uniqueEmail())
+	res := e.createAccount(t, staff, true, true)
+	if _, err := e.conn.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1`, res.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.a.AddOrganizationMember(ctx, e.org.ID, res.UserID, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	_, path = e.issue(t, staff, e.org.Slug, "")
+	if rec := e.verify(path); rec.Code != http.StatusBadRequest {
+		t.Fatalf("staff account = %d", rec.Code)
+	}
+
+	// A passwordless, non-staff existing account still works.
+	plain := strings.ToLower(uniqueEmail())
+	res = e.createAccount(t, plain, true, true)
+	if _, err := e.conn.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1`, res.UserID); err != nil {
+		t.Fatal(err)
+	}
+	_, path = e.issue(t, plain, e.org.Slug, "")
+	if rec := e.verify(path); rec.Code != http.StatusSeeOther {
+		t.Fatalf("passwordless account = %d", rec.Code)
+	}
+}
+
+func TestMagicLinkStaffRefusedEvenWhenPasswordAccountsAllowed(t *testing.T) {
+	e := newMagicEnvWith(t, func(c *auth.Config) { c.MagicLink.AllowPasswordAccounts = true })
+	email := strings.ToLower(uniqueEmail())
+	res := e.createAccount(t, email, true, true)
+	if _, err := e.a.AddOrganizationMember(context.Background(), e.org.ID, res.UserID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	_, path := e.issue(t, email, e.org.Slug, "")
+	if rec := e.verify(path); rec.Code != http.StatusBadRequest {
+		t.Fatalf("staff = %d", rec.Code)
+	}
+}
+
+// F1: verifying a previously unverified account removes whatever its earlier
+// registrant planted: sessions, password and MFA.
+func TestMagicLinkTakesOverUnverifiedAccount(t *testing.T) {
+	e := newMagicEnvWith(t, func(c *auth.Config) { c.MagicLink.AllowPasswordAccounts = true })
+	ctx := context.Background()
+	email := strings.ToLower(uniqueEmail())
+	attacker := e.createAccount(t, email, false, false) // attacker signed up first, holds a session
+	if _, err := e.conn.Exec(ctx, `INSERT INTO factors (user_id, factor_type, secret_enc, verified) VALUES ($1, 'totp', 'x', true)`, attacker.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.conn.Exec(ctx, `INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES ($1, 'h')`, attacker.UserID); err != nil {
+		t.Fatal(err)
+	}
+	attackerSession := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+		req.Header.Set("Authorization", "Bearer "+attacker.Token)
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if attacker.Token == "" || attackerSession() == http.StatusUnauthorized {
+		t.Fatal("test setup: attacker should hold a live session")
+	}
+
+	_, path := e.issue(t, email, e.org.Slug, "")
+	rec := e.verify(path)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("verify = %d", rec.Code)
+	}
+	if attackerSession() != http.StatusUnauthorized {
+		t.Fatal("attacker's pre-existing session must be revoked")
+	}
+	if n := e.count(t, `SELECT count(*) FROM credentials WHERE user_id = $1`, attacker.UserID); n != 0 {
+		t.Fatal("password credential must be removed")
+	}
+	if _, err := e.a.Login(ctx, email, "password1", "127.0.0.1", "t"); err == nil {
+		t.Fatal("the attacker's password must no longer log in")
+	}
+	if n := e.count(t, `SELECT count(*) FROM factors WHERE user_id = $1`, attacker.UserID); n != 0 {
+		t.Fatal("MFA factors must be cleared")
+	}
+	if n := e.count(t, `SELECT count(*) FROM mfa_recovery_codes WHERE user_id = $1`, attacker.UserID); n != 0 {
+		t.Fatal("recovery codes must be cleared")
+	}
+	if n := e.count(t, `SELECT count(*) FROM users_auth WHERE id = $1 AND email_verified`, attacker.UserID); n != 1 {
+		t.Fatal("account should now be verified")
+	}
+	// The magic-link session itself is live and is not MFA-pending.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	for _, c := range rec.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	sr := httptest.NewRecorder()
+	e.h.ServeHTTP(sr, req)
+	if sr.Code != http.StatusOK {
+		t.Fatalf("new session = %d %s", sr.Code, sr.Body.String())
 	}
 }

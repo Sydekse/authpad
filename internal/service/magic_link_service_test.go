@@ -343,6 +343,18 @@ func TestMagicLinkConfigValidation(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("production with key should pass: %v", err)
 	}
+	c = base()
+	c.Env = "staging"
+	c.Security.SessionSecret = strings.Repeat("s", 32)
+	c.Pages.SignInURL = "https://app.example.com/sign-in"
+	if c.Validate() == nil {
+		t.Fatal("only Env=development may run without a mailer")
+	}
+	c = base()
+	c.Security.TrustedProxyCIDRs = []string{"10.0.0.0/8", "nonsense"}
+	if c.Validate() == nil {
+		t.Fatal("invalid TrustedProxyCIDRs must fail")
+	}
 
 	c = base()
 	c.MagicLink.CodeFlow = true
@@ -350,6 +362,20 @@ func TestMagicLinkConfigValidation(t *testing.T) {
 		t.Fatal("code flow without exchange secret must fail")
 	}
 	c.MagicLink.ExchangeSecret = "short"
+	if c.Validate() == nil {
+		t.Fatal("code flow without a redirect destination must fail")
+	}
+	c.MagicLink.DefaultRedirectURL = "/relative"
+	if c.Validate() == nil {
+		t.Fatal("code flow with a non-absolute destination must fail")
+	}
+	c.MagicLink.DefaultRedirectURL = ""
+	c.Pages.CallbackURL = "http://localhost:3000/cb"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("CallbackURL should satisfy the destination check: %v", err)
+	}
+	c.Pages.CallbackURL = ""
+	c.MagicLink.DefaultRedirectURL = "https://app.example.com/welcome"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("dev code flow with a secret should pass: %v", err)
 	}

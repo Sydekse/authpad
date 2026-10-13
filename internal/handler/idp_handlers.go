@@ -367,7 +367,7 @@ func (h *IdPHandlers) ExportAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.Audit != nil {
-		h.Audit.LogAuth(r.Context(), userID, "account.export", parseIPFromRemote(r), r.Header.Get("User-Agent"), nil)
+		h.Audit.LogAuth(r.Context(), userID, "account.export", clientIP(r, h.Cfg), r.Header.Get("User-Agent"), nil)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=account-export.json")
@@ -386,7 +386,7 @@ func (h *IdPHandlers) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ip := parseIPFromRemote(r)
+	ip := clientIP(r, h.Cfg)
 	ua := r.Header.Get("User-Agent")
 	if err := h.Account.DeleteAccount(r.Context(), *userID, ip, ua); err != nil {
 		apierror.Internal(w, "DELETE_FAILED", "Could not delete account")

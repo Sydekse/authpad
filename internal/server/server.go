@@ -21,24 +21,28 @@ import (
 
 // Server is the wired auth library instance.
 type Server struct {
-	cfg        apptypes.AppConfig
-	auth       *handler.AuthHandlers
-	idp        *handler.IdPHandlers
-	oauth      *handler.OAuthHandlers
-	admin      *handler.AdminHandlers
-	mfa        *handler.MFAHandlers
-	invites    *handler.InviteHandlers
-	orgs       *handler.OrgHandlers
-	magic      *handler.MagicLinkHandlers
-	authDB     *database.AuthDB
-	idpDB      *database.IdPDB
-	AuthSvc    *service.AuthService
-	AccountSvc *service.AccountService
-	IdPSvc     *service.IdPService
-	OrgSvc     *service.OrgService
-	InviteSvc  *service.InviteService
-	MFASvc     *service.MFAService
-	Password   *security.PasswordService
+	cfg     apptypes.AppConfig
+	auth    *handler.AuthHandlers
+	idp     *handler.IdPHandlers
+	oauth   *handler.OAuthHandlers
+	admin   *handler.AdminHandlers
+	mfa     *handler.MFAHandlers
+	invites *handler.InviteHandlers
+	orgs    *handler.OrgHandlers
+	magic   *handler.MagicLinkHandlers
+
+	// Stops the hourly purge of expired magic-link rows.
+	cleanupStop context.CancelFunc
+	cleanupDone <-chan struct{}
+	authDB      *database.AuthDB
+	idpDB       *database.IdPDB
+	AuthSvc     *service.AuthService
+	AccountSvc  *service.AccountService
+	IdPSvc      *service.IdPService
+	OrgSvc      *service.OrgService
+	InviteSvc   *service.InviteService
+	MFASvc      *service.MFAService
+	Password    *security.PasswordService
 }
 
 // New wires dependencies and returns a ready server.
@@ -156,6 +160,8 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, mfaSvc, userAuthRepo, oauthRepo, oauthStateRepo, auditSvc, orgSvc)
 
 	var magicHandlers *handler.MagicLinkHandlers
+	var cleanupStop context.CancelFunc
+	var cleanupDone <-chan struct{}
 	if cfg.MagicLink.Enabled && orgSvc != nil {
 		var limiter security.WindowLimiter = security.NewMemoryWindowLimiter()
 		if cfg.Security.RedisURL != "" {
@@ -165,9 +171,13 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		}
 		linkSvc := service.NewMagicLinkService(&cfg, auth_repo.NewMagicLinkRepo(authDB), orgSvc,
 			service.NewMagicLinkMailer(&cfg), limiter, userAuthRepo, accountSvc)
+		linkSvc.WireAccountGuards(credRepo, factorRepo, staffClassifier(cfg, idpSvc, orgSvc))
+		linkSvc.SetMembership(orgSvc)
 		if cfg.MagicLink.CodeFlow {
 			linkSvc.EnableCodeFlow(auth_repo.NewMagicLinkCodeRepo(authDB), authSvc)
 		}
+		cleanupCtx, stop := context.WithCancel(context.Background())
+		cleanupStop, cleanupDone = stop, linkSvc.StartCleanup(cleanupCtx, time.Hour)
 		magicHandlers = &handler.MagicLinkHandlers{Links: linkSvc, Auth: authSvc, MFA: mfaSvc, Audit: auditSvc, Orgs: orgSvc, Cfg: &cfg}
 	}
 
@@ -204,6 +214,9 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		admin: &handler.AdminHandlers{IdP: idpSvc, Auth: authSvc, Audit: auditSvc, Cfg: &cfg},
 		mfa:   &handler.MFAHandlers{MFA: mfaSvc, Auth: authSvc, Cfg: &cfg},
 		magic: magicHandlers,
+
+		cleanupStop: cleanupStop,
+		cleanupDone: cleanupDone,
 	}
 	if inviteSvc != nil {
 		srv.invites = &handler.InviteHandlers{Invites: inviteSvc, Email: mailer, Auth: authSvc, IdP: idpSvc, Cfg: &cfg}
@@ -216,6 +229,10 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 
 // Close releases database connections.
 func (s *Server) Close() {
+	if s.cleanupStop != nil {
+		s.cleanupStop()
+		<-s.cleanupDone
+	}
 	if s.magic != nil {
 		s.magic.Links.Wait()
 	}
@@ -252,7 +269,8 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 		s.auth.Cfg.APIBasePath = basePath
 	}
 
-	rateLimit := middleware.RateLimiter(s.cfg.Security.RateLimitRPM, s.cfg.Security.RateLimitBurst, s.cfg.Security.RedisURL)
+	trustedNets, _ := apptypes.ParseCIDRs(s.cfg.Security.TrustedProxyCIDRs) // validated at startup
+	rateLimit := middleware.RateLimiter(s.cfg.Security.RateLimitRPM, s.cfg.Security.RateLimitBurst, s.cfg.Security.RedisURL, trustedNets)
 	csrf := middleware.CSRF(middleware.CSRFConfig{
 		Enabled:           s.cfg.Security.CSRFEnabled,
 		ServiceKeys:       s.cfg.Security.ServiceKeys,
@@ -268,7 +286,9 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			// No rateLimit/csrf on the request route: it carries its own per-email and
 			// per-IP limits and must answer 202 when limited. It sets no session.
 			r.Post("/magic-link", s.magic.Request)
-			r.With(rateLimit).Get("/magic-link/verify", s.magic.Verify)
+			// GET only renders a confirmation page; POST is the one that consumes.
+			r.With(rateLimit).Get("/magic-link/verify", s.magic.VerifyPage)
+			r.With(rateLimit).Post("/magic-link/verify", s.magic.Verify)
 			// Server-to-server; authenticated by the exchange secret, limited per IP.
 			r.Post("/magic-link/exchange", s.magic.Exchange)
 		}

@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,7 +26,11 @@ func newCodeEnv(t *testing.T) *magicEnv {
 }
 
 func (e *magicEnv) exchange(secret *string, code, origin string) *httptest.ResponseRecorder {
-	body, _ := json.Marshal(map[string]string{"code": code, "redirect_origin": origin})
+	return e.exchangeWith(secret, code, origin, testCodeVerifier)
+}
+
+func (e *magicEnv) exchangeWith(secret *string, code, origin, verifier string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]string{"code": code, "redirect_origin": origin, "code_verifier": verifier})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/magic-link/exchange", strings.NewReader(string(body)))
 	req.RemoteAddr = "203.0.113.50:4000"
 	if secret != nil {
@@ -111,13 +116,19 @@ func TestCodeFlowExchangeSuccessAndSessionToken(t *testing.T) {
 		SessionToken string `json:"session_token"`
 		ExpiresAt    string `json:"expires_at"`
 		User         struct{ ID, Email string }
-		OrgID        string `json:"org_id"`
+		OrgID        *string `json:"org_id"`
+		IsMember     bool    `json:"is_member"`
+		Role         *string `json:"role"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.SessionToken == "" || out.ExpiresAt == "" || out.User.Email != email || out.User.ID == "" || out.OrgID != e.org.ID.String() {
+	if out.SessionToken == "" || out.ExpiresAt == "" || out.User.Email != email || out.User.ID == "" {
 		t.Fatalf("bad body: %s", rec.Body.String())
+	}
+	// F3: signing in does not make the user a member, so the tenant is not reported.
+	if out.OrgID != nil || out.IsMember || out.Role != nil || !strings.Contains(rec.Body.String(), `"org_id":null`) {
+		t.Fatalf("non-member must get null org_id/role and is_member=false: %s", rec.Body.String())
 	}
 
 	// The token is a normal bearer session token.
@@ -215,5 +226,75 @@ func TestCodeFlowRevokedSessionCannotBeExchanged(t *testing.T) {
 	secret := testExchangeSecret
 	if rec := e.exchange(&secret, code, "https://app.example.com"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("revoked session = %d", rec.Code)
+	}
+}
+
+// F3: an active member gets org_id, is_member and role.
+func TestCodeFlowExchangeReportsMembership(t *testing.T) {
+	e := newCodeEnv(t)
+	ctx := context.Background()
+	email := strings.ToLower(uniqueEmail())
+	res := e.createAccount(t, email, true, true)
+	if _, err := e.conn.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1`, res.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.a.AddOrganizationMember(ctx, e.org.ID, res.UserID, "member"); err != nil {
+		t.Fatal(err)
+	}
+	_, path := e.issue(t, email, e.org.Slug, "https://app.example.com/")
+	code, _, _ := e.verifyCode(t, path)
+	secret := testExchangeSecret
+	rec := e.exchange(&secret, code, "https://app.example.com")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange = %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OrgID    *string `json:"org_id"`
+		IsMember bool    `json:"is_member"`
+		Role     string  `json:"role"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.OrgID == nil || *out.OrgID != e.org.ID.String() || !out.IsMember || out.Role != "member" {
+		t.Fatalf("member body: %s", rec.Body.String())
+	}
+}
+
+// F4: the request must carry a challenge, and exchange must present its verifier.
+func TestCodeFlowPKCE(t *testing.T) {
+	e := newCodeEnv(t)
+	secret := testExchangeSecret
+
+	body := fmt.Sprintf(`{"email":%q,"tenant":%q}`, uniqueEmail(), e.org.Slug)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/magic-link", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("request without code_challenge = %d", rec.Code)
+	}
+
+	token, path := e.issue(t, uniqueEmail(), e.org.Slug, "https://app.example.com/")
+	if n := e.count(t, `SELECT count(*) FROM magic_link_tokens WHERE token_hash = $1 AND code_challenge = $2`, auth.HashToken(token), pkceChallenge(testCodeVerifier)); n != 1 {
+		t.Fatal("challenge must be stored with the token")
+	}
+	code, _, _ := e.verifyCode(t, path)
+	if n := e.count(t, `SELECT count(*) FROM magic_link_codes WHERE code_hash = $1 AND code_challenge = $2`, auth.HashToken(code), pkceChallenge(testCodeVerifier)); n != 1 {
+		t.Fatal("challenge must be copied to the code")
+	}
+	for name, v := range map[string]string{"wrong": "A" + testCodeVerifier[1:], "missing": ""} {
+		if r := e.exchangeWith(&secret, code, "https://app.example.com", v); r.Code != http.StatusBadRequest {
+			t.Fatalf("%s verifier = %d", name, r.Code)
+		}
+	}
+	// Wrong verifier burned the code (missing was refused before consuming, but the first attempt burned it).
+	if r := e.exchange(&secret, code, "https://app.example.com"); r.Code != http.StatusBadRequest {
+		t.Fatalf("code should be burned by a wrong verifier, got %d", r.Code)
+	}
+
+	_, path = e.issue(t, uniqueEmail(), e.org.Slug, "https://app.example.com/")
+	code, _, _ = e.verifyCode(t, path)
+	if r := e.exchange(&secret, code, "https://app.example.com"); r.Code != http.StatusOK {
+		t.Fatalf("matching verifier = %d %s", r.Code, r.Body.String())
 	}
 }

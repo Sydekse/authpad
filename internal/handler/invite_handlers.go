@@ -134,7 +134,7 @@ func (h *InviteHandlers) Redeem(w http.ResponseWriter, r *http.Request) {
 		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
 		return
 	}
-	result, err := h.Invites.Redeem(r.Context(), body.Token, body.Name, body.Password, body.Profile, parseIPFromRemote(r), r.Header.Get("User-Agent"))
+	result, err := h.Invites.Redeem(r.Context(), body.Token, body.Name, body.Password, body.Profile, clientIP(r, h.Cfg), r.Header.Get("User-Agent"))
 	if err != nil {
 		if errors.Is(err, service.ErrEmailTaken) {
 			apierror.Conflict(w, "EMAIL_TAKEN", "An account with this email already exists")

@@ -16,32 +16,19 @@ import (
 	"golang.org/x/time/rate"
 )
 
-func clientIP(r *http.Request) string {
-	raw := r.RemoteAddr
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		raw = strings.TrimSpace(strings.Split(xff, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(raw)
-	if err != nil {
-		if net.ParseIP(raw) != nil {
-			return raw
-		}
-		return ""
-	}
-	return host
-}
-
 type limiterEntry struct {
 	lim      *rate.Limiter
 	lastUsed int64
 }
 
-func RateLimiter(requestsPerMinute, burst int, redisURL string) func(next http.Handler) http.Handler {
+// RateLimiter limits per client IP. trusted lists the proxies whose
+// X-Forwarded-For is believed (see security.ClientIP); nil ignores the header.
+func RateLimiter(requestsPerMinute, burst int, redisURL string, trusted []*net.IPNet) func(next http.Handler) http.Handler {
 	if requestsPerMinute <= 0 {
 		return func(next http.Handler) http.Handler { return next }
 	}
 	if redisURL != "" {
-		return redisRateLimiter(requestsPerMinute, burst, redisURL)
+		return redisRateLimiter(requestsPerMinute, burst, redisURL, trusted)
 	}
 	limit := rate.Every(time.Minute / time.Duration(requestsPerMinute))
 	m := &sync.Map{}
@@ -61,7 +48,7 @@ func RateLimiter(requestsPerMinute, burst int, redisURL string) func(next http.H
 	}()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := clientIP(r)
+			ip := security.ClientIP(r, trusted)
 			if ip == "" {
 				next.ServeHTTP(w, r)
 				return
@@ -87,16 +74,16 @@ func RateLimiter(requestsPerMinute, burst int, redisURL string) func(next http.H
 	}
 }
 
-func redisRateLimiter(requestsPerMinute, burst int, redisURL string) func(next http.Handler) http.Handler {
+func redisRateLimiter(requestsPerMinute, burst int, redisURL string, trusted []*net.IPNet) func(next http.Handler) http.Handler {
 	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
-		return RateLimiter(requestsPerMinute, burst, "")
+		return RateLimiter(requestsPerMinute, burst, "", trusted)
 	}
 	client := redis.NewClient(opt)
 	window := time.Minute
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := clientIP(r)
+			ip := security.ClientIP(r, trusted)
 			if ip == "" {
 				next.ServeHTTP(w, r)
 				return

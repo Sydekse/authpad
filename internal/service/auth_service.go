@@ -384,7 +384,13 @@ func (s *AuthService) CreatePasswordResetToken(ctx context.Context, email string
 		return "", nil
 	}
 	cred, err := s.credRepo.GetByUserID(ctx, u.ID)
-	if err != nil || cred == nil {
+	if err != nil {
+		return "", nil
+	}
+	// An account without a password (magic-link or OAuth sign-up, or one whose
+	// password was removed when a magic link took it over) can set one through a
+	// reset, but only once its address is verified.
+	if cred == nil && !u.EmailVerified {
 		return "", nil
 	}
 	rawToken, err := security.GenerateOpaqueToken()
@@ -416,15 +422,25 @@ func (s *AuthService) ResetPassword(ctx context.Context, rawToken, newPassword s
 		return ErrResetTokenInvalid
 	}
 	cred, err := s.credRepo.GetByUserID(ctx, t.UserID)
-	if err != nil || cred == nil {
+	if err != nil {
 		return ErrNoPasswordCredential
 	}
-	hash, err := s.password.Hash(newPassword)
-	if err != nil {
-		return err
-	}
-	if err := s.credRepo.UpdateHash(ctx, cred.ID, hash, 2); err != nil {
-		return err
+	if cred == nil {
+		u, err := s.userRepo.GetByID(ctx, t.UserID)
+		if err != nil || u == nil || !u.EmailVerified {
+			return ErrNoPasswordCredential
+		}
+		if err := s.CreateCredential(ctx, t.UserID, newPassword); err != nil {
+			return err
+		}
+	} else {
+		hash, err := s.password.Hash(newPassword)
+		if err != nil {
+			return err
+		}
+		if err := s.credRepo.UpdateHash(ctx, cred.ID, hash, 2); err != nil {
+			return err
+		}
 	}
 	return s.resetTokenRepo.DeleteByID(ctx, t.ID)
 }

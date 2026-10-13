@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -73,15 +74,35 @@ func (m *ResendMagicLinkMailer) SendMagicLink(ctx context.Context, to, linkURL s
 	return nil
 }
 
-// DevMagicLinkMailer prints the link instead of sending it. Non-production only.
+// DevMagicLinkMailer prints the link instead of sending it. It is only used
+// when Env is "development". Unless PrintToken is set the token is redacted, so
+// a mailer built outside NewMagicLinkMailer never writes a live token.
 type DevMagicLinkMailer struct {
-	Out io.Writer
+	Out        io.Writer
+	PrintToken bool
+}
+
+// redactLinkToken replaces the token query value so the link stays recognisable.
+func redactLinkToken(linkURL string) string {
+	u, err := url.Parse(linkURL)
+	if err != nil {
+		return "[unparseable link redacted]"
+	}
+	q := u.Query()
+	if q.Has("token") {
+		q.Set("token", "REDACTED")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
 
 func (m *DevMagicLinkMailer) SendMagicLink(_ context.Context, to, linkURL string) error {
 	out := m.Out
 	if out == nil {
 		out = os.Stdout
+	}
+	if !m.PrintToken {
+		linkURL = redactLinkToken(linkURL)
 	}
 	_, err := fmt.Fprintf(out, "[magic-link] RESEND_API_KEY not set; sign-in link for %s: %s\n", to, linkURL)
 	return err
@@ -96,8 +117,8 @@ func (unconfiguredMagicLinkMailer) SendMagicLink(context.Context, string, string
 }
 
 // NewMagicLinkMailer picks the configured mailer: a host override, Resend when
-// a key is set, the stdout dev mailer outside production, otherwise one that
-// always errors.
+// a key is set, the stdout dev mailer only when Env is exactly "development",
+// otherwise one that always errors.
 func NewMagicLinkMailer(cfg *apptypes.AppConfig) apptypes.MagicLinkMailer {
 	if cfg.MagicLink.Mailer != nil {
 		return cfg.MagicLink.Mailer
@@ -116,9 +137,9 @@ func NewMagicLinkMailer(cfg *apptypes.AppConfig) apptypes.MagicLinkMailer {
 		}
 		return &ResendMagicLinkMailer{APIKey: cfg.Email.ResendAPIKey, From: from, AppName: app}
 	}
-	if cfg.Env != "production" {
-		return &DevMagicLinkMailer{}
+	if cfg.Env == "development" {
+		return &DevMagicLinkMailer{PrintToken: true}
 	}
-	log.Error().Msg("magic link: RESEND_API_KEY is empty in production; links will not be sent")
+	log.Error().Str("env", cfg.Env).Msg("magic link: RESEND_API_KEY is empty outside development; links will not be sent")
 	return unconfiguredMagicLinkMailer{}
 }
