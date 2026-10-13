@@ -481,7 +481,7 @@ func TestMagicLinkRefusesPasswordAndStaffAccounts(t *testing.T) {
 	pw := strings.ToLower(uniqueEmail())
 	e.createAccount(t, pw, true, true)
 	_, path := e.issue(t, pw, e.org.Slug, "")
-	if rec := e.verify(path); rec.Code != http.StatusBadRequest || len(rec.Result().Cookies()) != 0 {
+	if rec := e.verify(path); rec.Code != http.StatusBadRequest || len(nonNonceCookies(rec.Result().Cookies())) != 0 {
 		t.Fatalf("password account = %d cookies=%v", rec.Code, rec.Result().Cookies())
 	}
 
@@ -581,4 +581,16 @@ func TestMagicLinkTakesOverUnverifiedAccount(t *testing.T) {
 	if sr.Code != http.StatusOK {
 		t.Fatalf("new session = %d %s", sr.Code, sr.Body.String())
 	}
+}
+
+// nonNonceCookies drops the interstitial nonce cookie, which verify always
+// clears; the assertions care about session or CSRF cookies only.
+func nonNonceCookies(cs []*http.Cookie) []*http.Cookie {
+	var out []*http.Cookie
+	for _, c := range cs {
+		if c.Name != "authpad_ml_nonce" {
+			out = append(out, c)
+		}
+	}
+	return out
 }

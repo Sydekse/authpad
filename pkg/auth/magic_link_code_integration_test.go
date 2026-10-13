@@ -62,7 +62,7 @@ func TestCodeFlowVerifyAppendsCodeAndSetsNoCookie(t *testing.T) {
 	if loc.Scheme+"://"+loc.Host+loc.Path != "https://app.example.com/talks/1" || loc.Query().Get("lang") != "en" || code == "" {
 		t.Fatalf("Location = %s", loc)
 	}
-	if len(rec.Result().Cookies()) != 0 {
+	if len(nonNonceCookies(rec.Result().Cookies())) != 0 {
 		t.Fatalf("code flow must not set cookies: %v", rec.Result().Cookies())
 	}
 	if strings.Contains(loc.String(), token) {
