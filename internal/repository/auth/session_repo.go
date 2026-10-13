@@ -104,3 +104,21 @@ func (r *SessionRepo) SetActiveOrganization(ctx context.Context, id uuid.UUID, o
 	_, err := r.db.Exec(ctx, `UPDATE sessions SET active_organization_id = $1 WHERE id = $2`, orgID, id)
 	return err
 }
+
+// IssueToken replaces the token hash of a live session without changing its
+// expiry, and returns the session's user and state. It returns ok=false when
+// the session is revoked, expired or unknown.
+func (r *SessionRepo) IssueToken(ctx context.Context, id uuid.UUID, tokenHash string) (userID uuid.UUID, expiresAt time.Time, mfaPending, ok bool, err error) {
+	err = r.db.QueryRow(ctx, `
+		UPDATE sessions SET token_hash = $1, last_active_at = NOW()
+		WHERE id = $2 AND revoked = false AND expires_at > NOW()
+		RETURNING user_id, expires_at, COALESCE(mfa_pending, false)
+	`, tokenHash, id).Scan(&userID, &expiresAt, &mfaPending)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return uuid.Nil, time.Time{}, false, false, nil
+		}
+		return uuid.Nil, time.Time{}, false, false, err
+	}
+	return userID, expiresAt, mfaPending, true, nil
+}

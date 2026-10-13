@@ -165,6 +165,9 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		}
 		linkSvc := service.NewMagicLinkService(&cfg, auth_repo.NewMagicLinkRepo(authDB), orgSvc,
 			service.NewMagicLinkMailer(&cfg), limiter, userAuthRepo, accountSvc)
+		if cfg.MagicLink.CodeFlow {
+			linkSvc.EnableCodeFlow(auth_repo.NewMagicLinkCodeRepo(authDB), authSvc)
+		}
 		magicHandlers = &handler.MagicLinkHandlers{Links: linkSvc, Auth: authSvc, MFA: mfaSvc, Audit: auditSvc, Orgs: orgSvc, Cfg: &cfg}
 	}
 
@@ -266,6 +269,8 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 			// per-IP limits and must answer 202 when limited. It sets no session.
 			r.Post("/magic-link", s.magic.Request)
 			r.With(rateLimit).Get("/magic-link/verify", s.magic.Verify)
+			// Server-to-server; authenticated by the exchange secret, limited per IP.
+			r.Post("/magic-link/exchange", s.magic.Exchange)
 		}
 		if !s.cfg.DisablePublicSignup && !s.skipPath("/auth/signup") {
 			r.With(rateLimit).Post("/auth/signup", s.auth.Signup)

@@ -60,3 +60,22 @@ func TestMagicLinkRedirectAllowed(t *testing.T) {
 		t.Error("non-origin allowlist entries must be ignored")
 	}
 }
+
+func TestNormalizeOrigin(t *testing.T) {
+	good := map[string]string{
+		"https://app.example.com":   "https://app.example.com:443",
+		"https://APP.example.com/":  "https://app.example.com:443",
+		"http://app.example.com:80": "http://app.example.com:80",
+	}
+	good["http://localhost:3000"] = "http://localhost:3000"
+	for in, want := range good {
+		if got, ok := NormalizeOrigin(in); !ok || got != want {
+			t.Errorf("NormalizeOrigin(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"", " https://a.com", "https://a.com/x", "https://a.com?x=1", "https://a.com#f", "https://u@a.com", "//a.com", "ftp://a.com", "https://a.com\\x", "a.com"} {
+		if got, ok := NormalizeOrigin(bad); ok {
+			t.Errorf("NormalizeOrigin(%q) = %q, want rejection", bad, got)
+		}
+	}
+}

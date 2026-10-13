@@ -4,6 +4,7 @@
 
 - Passwordless magic-link sign-in: `POST /magic-link` (always 202) and `GET /magic-link/verify`. Opt in with `MAGIC_LINK_ENABLED=true`; requires tenancy. Tokens are 32 random bytes, stored as SHA-256 only, valid 15 minutes, single use. Per-email and per-IP limits, Resend delivery (dev: link printed to stdout), exact-origin redirect allowlist. Does not create org membership. See docs/magic-link.md.
 - Migration `000007_magic_link_tokens` (Auth DB). New config: `Config.MagicLink`, `MagicLinkMailer`.
+- Magic-link one-time-code flow for apps on another registrable domain: `MAGIC_LINK_CODE_FLOW=true` makes verify redirect with `?code=` instead of setting a cookie, and `POST /magic-link/exchange` (header `X-Authpad-Exchange-Secret` = `MAGIC_LINK_EXCHANGE_SECRET`, per-IP limit `MAGIC_LINK_EXCHANGE_LIMIT`) redeems it server-to-server for a session bearer token. Codes are 32 random bytes, stored as SHA-256 only, valid 60 seconds, single use, bound to session, tenant and redirect origin. Migration `000008_magic_link_codes` (Auth DB). New config: `MagicLink.CodeFlow`, `ExchangeSecret`, `ExchangeLimit`.
 
 ## 0.3.0
 

@@ -121,6 +121,9 @@ func LoadFromEnv() Config {
 	cfg.MagicLink.EmailLimit = getEnvInt("MAGIC_LINK_EMAIL_LIMIT", 5)
 	cfg.MagicLink.IPLimit = getEnvInt("MAGIC_LINK_IP_LIMIT", 20)
 	cfg.MagicLink.LimitWindow = getEnvDuration("MAGIC_LINK_LIMIT_WINDOW", 15*time.Minute)
+	cfg.MagicLink.CodeFlow = os.Getenv("MAGIC_LINK_CODE_FLOW") == "true"
+	cfg.MagicLink.ExchangeSecret = os.Getenv("MAGIC_LINK_EXCHANGE_SECRET")
+	cfg.MagicLink.ExchangeLimit = getEnvInt("MAGIC_LINK_EXCHANGE_LIMIT", 60)
 	if raw := os.Getenv("MAGIC_LINK_REDIRECT_ALLOWLIST"); raw != "" {
 		for _, o := range strings.Split(raw, ",") {
 			if o = strings.TrimSpace(o); o != "" {

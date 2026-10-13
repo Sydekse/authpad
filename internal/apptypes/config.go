@@ -91,6 +91,15 @@ type MagicLinkConfig struct {
 	EmailLimit         int
 	IPLimit            int
 	LimitWindow        time.Duration
+	// CodeFlow makes verify hand the session over with a one-time code in the
+	// redirect instead of an authpad cookie, for apps on another registrable
+	// domain. The app redeems the code server-to-server at POST /magic-link/exchange.
+	CodeFlow bool
+	// ExchangeSecret authenticates POST /magic-link/exchange (header
+	// X-Authpad-Exchange-Secret). Empty disables the endpoint.
+	ExchangeSecret string
+	// ExchangeLimit is the per-IP exchange attempts per minute (0 disables).
+	ExchangeLimit int
 	// Mailer overrides the built-in Resend / dev-log mailer (tests, hosts).
 	Mailer MagicLinkMailer
 }

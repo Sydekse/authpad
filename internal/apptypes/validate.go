@@ -25,6 +25,14 @@ func (c *AppConfig) Validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return errors.New("MagicLink.BaseURL must be an absolute http(s) URL")
 		}
+		if c.MagicLink.CodeFlow {
+			if c.MagicLink.ExchangeSecret == "" {
+				return errors.New("MagicLink.CodeFlow requires MagicLink.ExchangeSecret")
+			}
+			if c.Env == "production" && len(c.MagicLink.ExchangeSecret) < 32 {
+				return errors.New("MagicLink.ExchangeSecret must be at least 32 characters in production")
+			}
+		}
 		if c.Env == "production" && c.MagicLink.Mailer == nil && c.Email.ResendAPIKey == "" {
 			return errors.New("MagicLink requires RESEND_API_KEY (or a custom MagicLink.Mailer) in production")
 		}

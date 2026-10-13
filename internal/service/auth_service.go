@@ -344,6 +344,25 @@ func (s *AuthService) RotateSession(ctx context.Context, sess *auth.Session) (st
 	return token, sess, nil
 }
 
+// IssueSessionToken replaces the bearer token of a live session with a fresh
+// one and returns it. The previous token stops working. Expiry is unchanged.
+// Used by the magic-link code exchange, which never has the original token
+// (only its hash is stored).
+func (s *AuthService) IssueSessionToken(ctx context.Context, sessionID uuid.UUID) (token string, userID uuid.UUID, expiresAt time.Time, mfaPending bool, err error) {
+	token, err = security.GenerateOpaqueToken()
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, false, err
+	}
+	userID, expiresAt, mfaPending, ok, err := s.sessionRepo.IssueToken(ctx, sessionID, security.HashToken(token))
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, false, err
+	}
+	if !ok {
+		return "", uuid.Nil, time.Time{}, false, ErrSessionNotFound
+	}
+	return token, userID, expiresAt, mfaPending, nil
+}
+
 func (s *AuthService) RevokeSession(ctx context.Context, sessionID uuid.UUID) error {
 	return s.sessionRepo.RevokeByID(ctx, sessionID)
 }

@@ -67,6 +67,10 @@ type MagicLinkService struct {
 	users   *auth_repo.UserAuthRepo
 	account *AccountService
 
+	// Code-flow dependencies; set by EnableCodeFlow.
+	codes   MagicLinkCodeStore
+	authSvc *AuthService
+
 	sem chan struct{}
 	wg  sync.WaitGroup
 }

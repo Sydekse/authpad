@@ -34,7 +34,9 @@ type magicEnv struct {
 	orgAlt *auth.Organization
 }
 
-func newMagicEnv(t *testing.T) *magicEnv {
+func newMagicEnv(t *testing.T) *magicEnv { return newMagicEnvWith(t, nil) }
+
+func newMagicEnvWith(t *testing.T, tweak func(*auth.Config)) *magicEnv {
 	t.Helper()
 	dsn := testDSN(t)
 	ctx := context.Background()
@@ -55,6 +57,9 @@ func newMagicEnv(t *testing.T) *magicEnv {
 	cfg.MagicLink.DefaultRedirectURL = "https://app.example.com/welcome"
 	cfg.MagicLink.EmailLimit, cfg.MagicLink.IPLimit = 0, 0
 	cfg.MagicLink.Mailer = mail
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	a, err := auth.New(cfg)
 	if err != nil {
 		t.Fatal(err)

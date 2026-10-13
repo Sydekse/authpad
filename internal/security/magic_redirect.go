@@ -54,3 +54,31 @@ func originOf(u *url.URL) (string, bool) {
 	}
 	return scheme + "://" + host + ":" + port, true
 }
+
+// NormalizeOrigin parses raw as a bare http(s) origin (no userinfo, path,
+// query or fragment) and returns it as "scheme://host:port".
+func NormalizeOrigin(raw string) (string, bool) {
+	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > 300 {
+		return "", false
+	}
+	for _, r := range raw {
+		if r <= 0x20 || r == 0x7f || r == '\\' {
+			return "", false
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Hostname() == "" ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.Contains(raw, "?") || strings.Contains(raw, "#") {
+		return "", false
+	}
+	return originOf(u)
+}
+
+// OriginOfURL returns the normalized origin of an absolute http(s) URL.
+func OriginOfURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return originOf(u)
+}
