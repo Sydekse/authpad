@@ -113,6 +113,21 @@ func LoadFromEnv() Config {
 			}
 		}
 	}
+	cfg.MagicLink.Enabled = os.Getenv("MAGIC_LINK_ENABLED") == "true"
+	cfg.MagicLink.BaseURL = os.Getenv("MAGIC_LINK_BASE_URL")
+	cfg.MagicLink.From = os.Getenv("MAGIC_LINK_FROM")
+	cfg.MagicLink.DefaultRedirectURL = os.Getenv("MAGIC_LINK_DEFAULT_REDIRECT")
+	cfg.MagicLink.TTL = getEnvDuration("MAGIC_LINK_TTL", 15*time.Minute)
+	cfg.MagicLink.EmailLimit = getEnvInt("MAGIC_LINK_EMAIL_LIMIT", 5)
+	cfg.MagicLink.IPLimit = getEnvInt("MAGIC_LINK_IP_LIMIT", 20)
+	cfg.MagicLink.LimitWindow = getEnvDuration("MAGIC_LINK_LIMIT_WINDOW", 15*time.Minute)
+	if raw := os.Getenv("MAGIC_LINK_REDIRECT_ALLOWLIST"); raw != "" {
+		for _, o := range strings.Split(raw, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				cfg.MagicLink.RedirectAllowlist = append(cfg.MagicLink.RedirectAllowlist, o)
+			}
+		}
+	}
 	cfg.APIBasePath = getEnv("AUTHPAD_API_BASE_PATH", "/api/v1")
 
 	return cfg

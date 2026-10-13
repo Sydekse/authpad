@@ -566,6 +566,22 @@ func (s *OrgService) ClearActive(ctx context.Context, sessionID uuid.UUID) error
 	return s.auth.SetSessionActiveOrganization(ctx, sessionID, nil)
 }
 
+// ResolveTenant finds an organization by id or slug. It returns nil, nil when
+// there is no such organization, so callers can treat "missing" uniformly.
+func (s *OrgService) ResolveTenant(ctx context.Context, tenant string) (*idp.Organization, error) {
+	if !s.enabled() {
+		return nil, ErrTenancyDisabled
+	}
+	tenant = strings.TrimSpace(tenant)
+	if tenant == "" {
+		return nil, nil
+	}
+	if id, err := uuid.Parse(tenant); err == nil {
+		return s.repo.GetByID(ctx, id)
+	}
+	return s.repo.GetBySlug(ctx, strings.ToLower(tenant))
+}
+
 func (s *OrgService) GetByID(ctx context.Context, id uuid.UUID) (*idp.Organization, error) {
 	if !s.enabled() {
 		return nil, ErrTenancyDisabled

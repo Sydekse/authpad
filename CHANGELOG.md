@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Passwordless magic-link sign-in: `POST /magic-link` (always 202) and `GET /magic-link/verify`. Opt in with `MAGIC_LINK_ENABLED=true`; requires tenancy. Tokens are 32 random bytes, stored as SHA-256 only, valid 15 minutes, single use. Per-email and per-IP limits, Resend delivery (dev: link printed to stdout), exact-origin redirect allowlist. Does not create org membership. See docs/magic-link.md.
+- Migration `000007_magic_link_tokens` (Auth DB). New config: `Config.MagicLink`, `MagicLinkMailer`.
+
 ## 0.3.0
 
 - Account lock: `POST /admin/users/{id}/lock` and `/unlock`. Locked password and OAuth sign-in return `ACCOUNT_LOCKED`. Unlock only clears `locked`, not `suspended`.

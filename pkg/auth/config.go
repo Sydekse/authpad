@@ -23,6 +23,8 @@ type (
 	InvitationConfig = apptypes.InvitationConfig
 	TenancyConfig    = apptypes.TenancyConfig
 	Mailer           = apptypes.Mailer
+	MagicLinkConfig  = apptypes.MagicLinkConfig
+	MagicLinkMailer  = apptypes.MagicLinkMailer
 )
 
 const (
@@ -50,6 +52,12 @@ func DefaultConfig() Config {
 			RateLimitBurst: 5,
 			CSRFEnabled:    true,
 			PasswordPolicy: apptypes.PasswordPolicy{MinLength: 8},
+		},
+		MagicLink: MagicLinkConfig{
+			TTL:         15 * time.Minute,
+			EmailLimit:  5,
+			IPLimit:     20,
+			LimitWindow: 15 * time.Minute,
 		},
 		AllowedOrigins: []string{"http://localhost:3000"},
 		Port:           "8080",

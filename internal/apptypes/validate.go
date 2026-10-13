@@ -17,6 +17,18 @@ func (c *AppConfig) Validate() error {
 	if c.Invitations.Enabled && c.IdPDatabaseURL == "" {
 		return errors.New("Invitations.Enabled requires IdPDatabaseURL")
 	}
+	if c.MagicLink.Enabled {
+		if !c.Tenancy.Enabled {
+			return errors.New("MagicLink.Enabled requires Tenancy.Enabled")
+		}
+		u, err := url.Parse(strings.TrimSpace(c.MagicLink.BaseURL))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("MagicLink.BaseURL must be an absolute http(s) URL")
+		}
+		if c.Env == "production" && c.MagicLink.Mailer == nil && c.Email.ResendAPIKey == "" {
+			return errors.New("MagicLink requires RESEND_API_KEY (or a custom MagicLink.Mailer) in production")
+		}
+	}
 	if c.Env != "production" {
 		return nil
 	}

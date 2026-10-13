@@ -60,6 +60,23 @@ func (r *UserAuthRepo) GetByEmail(ctx context.Context, email string) (*auth.User
 	return &u, nil
 }
 
+// GetByEmailFold returns a user by email ignoring case (oldest row wins).
+func (r *UserAuthRepo) GetByEmailFold(ctx context.Context, email string) (*auth.UserAuth, error) {
+	var u auth.UserAuth
+	err := r.db.QueryRow(ctx, `
+		SELECT id, email, email_verified, status, created_at, updated_at, deleted_at
+		FROM users_auth WHERE lower(email) = lower($1) AND deleted_at IS NULL
+		ORDER BY created_at LIMIT 1
+	`, email).Scan(&u.ID, &u.Email, &u.EmailVerified, &u.Status, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
 // UpdateStatus updates user status (e.g. pending_deletion).
 func (r *UserAuthRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, deletedAt interface{}) error {
 	_, err := r.db.Exec(ctx, `

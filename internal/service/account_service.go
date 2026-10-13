@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
@@ -131,6 +132,35 @@ func (s *AccountService) CreateAccount(ctx context.Context, req CreateAccountReq
 		SessionID: sessID,
 		ExpiresAt: expiresAt,
 	}, nil
+}
+
+// CreatePasswordlessAccount creates a verified user with no credential, for
+// magic-link sign-in. The signup hook runs and a failure rolls everything back.
+func (s *AccountService) CreatePasswordlessAccount(ctx context.Context, email, ipAddress, userAgent string) (uuid.UUID, error) {
+	userID := uuid.New()
+	if err := s.authSvc.CreateUserAuth(ctx, userID, email); err != nil {
+		return uuid.Nil, err
+	}
+	if s.idpSvc != nil {
+		if err := s.idpSvc.CreateProfile(ctx, userID, apptypes.ProfileInput{Name: strings.SplitN(email, "@", 2)[0], Metadata: map[string]any{}}); err != nil {
+			s.authSvc.RollbackUser(ctx, userID)
+			return uuid.Nil, err
+		}
+	}
+	_ = s.authSvc.MarkEmailVerified(ctx, userID)
+	if s.auditSvc != nil {
+		s.auditSvc.LogAuth(ctx, &userID, "account.created", ipAddress, userAgent, map[string]any{"email": email, "method": "magic_link"})
+	}
+	if s.hooks.OnSignup != nil {
+		if err := s.hooks.OnSignup(ctx, userID, email); err != nil {
+			if s.idpSvc != nil {
+				_ = s.idpSvc.RollbackProfile(ctx, userID)
+			}
+			s.authSvc.RollbackUser(ctx, userID)
+			return uuid.Nil, err
+		}
+	}
+	return userID, nil
 }
 
 func (s *AccountService) DeleteAccount(ctx context.Context, userID uuid.UUID, ip, ua string) error {

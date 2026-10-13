@@ -67,6 +67,34 @@ type EmailConfig struct {
 	AppName             string
 }
 
+// MagicLinkMailer delivers passwordless sign-in links. It is separate from
+// Mailer so existing host implementations of Mailer keep compiling.
+type MagicLinkMailer interface {
+	SendMagicLink(ctx context.Context, to, linkURL string) error
+}
+
+// MagicLinkConfig controls passwordless sign-in for attendees. Off by default.
+type MagicLinkConfig struct {
+	Enabled bool
+	// BaseURL is the public origin of this API (for example https://api.example.com).
+	// Links are BaseURL + APIBasePath + /magic-link/verify?token=...
+	BaseURL string
+	// From is the sender address; falls back to Email.ResendFrom.
+	From string
+	// RedirectAllowlist holds exact origins (scheme://host[:port]) that
+	// redirect_to may point at.
+	RedirectAllowlist []string
+	// DefaultRedirectURL is used when redirect_to is absent or not allowed;
+	// falls back to Pages.CallbackURL.
+	DefaultRedirectURL string
+	TTL                time.Duration
+	EmailLimit         int
+	IPLimit            int
+	LimitWindow        time.Duration
+	// Mailer overrides the built-in Resend / dev-log mailer (tests, hosts).
+	Mailer MagicLinkMailer
+}
+
 type RoleDefinition struct {
 	Name        string
 	Description string
@@ -156,6 +184,7 @@ type AppConfig struct {
 	InviteOnlyRoles []string
 	Mailer          Mailer
 	Invitations     InvitationConfig
+	MagicLink       MagicLinkConfig
 	Tenancy         TenancyConfig
 	// SkipHTTPPaths are mount-relative routes authpad will not register
 	// (for example "/admin/roles") so a host can provide them itself.

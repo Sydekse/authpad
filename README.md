@@ -14,6 +14,7 @@ This is the public starter pack for running your own Go auth service. Sydek’s 
 - Audit logs, email verification, CSRF, rate limits, TOTP MFA
 - Optional generic invitations (`AUTHPAD_INVITATIONS_ENABLED`)
 - Optional company tenancy (v0.2.0): organizations, memberships, **per-org** roles / departments / levels, org invites with JSON payload, change or remove a member’s role
+- Optional passwordless magic-link sign-in for attendees (`MAGIC_LINK_ENABLED`, requires tenancy): [docs/magic-link.md](docs/magic-link.md)
 - Account lock with admin unlock (`POST /admin/users/{id}/lock` and `/unlock`)
 - Optional shorter idle timeout for staff sessions (`SESSION_STAFF_IDLE_TIMEOUT`)
 - Embedded PostgreSQL migrations
