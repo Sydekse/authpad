@@ -210,7 +210,7 @@ func (h *AdminHandlers) LockUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Audit != nil {
 		uid := target
-		h.Audit.LogAuth(r.Context(), &uid, "account.lock", parseIPFromRemote(r), r.Header.Get("User-Agent"), map[string]any{
+		h.Audit.LogAuth(r.Context(), &uid, "account.lock", clientIP(r, h.Cfg), r.Header.Get("User-Agent"), map[string]any{
 			"actor": actor.String(),
 		})
 	}
@@ -241,7 +241,7 @@ func (h *AdminHandlers) UnlockUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Audit != nil {
 		uid := target
-		h.Audit.LogAuth(r.Context(), &uid, "account.unlock", parseIPFromRemote(r), r.Header.Get("User-Agent"), map[string]any{
+		h.Audit.LogAuth(r.Context(), &uid, "account.unlock", clientIP(r, h.Cfg), r.Header.Get("User-Agent"), map[string]any{
 			"actor": actor.String(),
 		})
 	}

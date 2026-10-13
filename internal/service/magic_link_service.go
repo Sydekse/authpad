@@ -46,13 +46,31 @@ type MagicLinkRequest struct {
 	Tenant     string
 	RedirectTo string
 	IP         string
+	// CodeChallenge is the PKCE S256 challenge; required when the code flow is on.
+	CodeChallenge string
 }
 
 type MagicLinkVerified struct {
-	User         *auth.UserAuth
-	Organization *idp.Organization
-	RedirectTo   string // validated against the allowlist; empty means use the default
-	Created      bool
+	User          *auth.UserAuth
+	Organization  *idp.Organization
+	RedirectTo    string // validated against the allowlist; empty means use the default
+	CodeChallenge string // carried from the request into the one-time code
+	Created       bool
+}
+
+// MagicLinkAccounts is how Verify finds, classifies and hardens accounts.
+type MagicLinkAccounts interface {
+	// FindOrCreate returns the account for email, creating a passwordless one
+	// when none exists. A nil user means sign-in is not possible.
+	FindOrCreate(ctx context.Context, email, ip, ua string) (user *auth.UserAuth, created bool, err error)
+	// IsStaff reports whether the account is a platform admin or org staff.
+	IsStaff(ctx context.Context, userID uuid.UUID) (bool, error)
+	HasPassword(ctx context.Context, userID uuid.UUID) (bool, error)
+	// TakeOver is called when the link is the first proof of inbox ownership for
+	// an unverified account. Whoever registered it earlier may have planted
+	// credentials, so it revokes every session, removes the password and clears
+	// MFA enrolment, then marks the email verified.
+	TakeOver(ctx context.Context, userID uuid.UUID) error
 }
 
 // MagicLinkService issues and redeems passwordless sign-in links.
@@ -64,8 +82,13 @@ type MagicLinkService struct {
 	limiter security.WindowLimiter
 
 	// Verify-side dependencies. Nil in request-only unit tests.
-	users   *auth_repo.UserAuthRepo
-	account *AccountService
+	accounts MagicLinkAccounts
+	dbAccts  *dbMagicLinkAccounts
+
+	// Code-flow dependencies; set by EnableCodeFlow.
+	codes   MagicLinkCodeStore
+	authSvc *AuthService
+	members MembershipLookup
 
 	sem chan struct{}
 	wg  sync.WaitGroup
@@ -80,11 +103,42 @@ func NewMagicLinkService(
 	users *auth_repo.UserAuthRepo,
 	account *AccountService,
 ) *MagicLinkService {
-	return &MagicLinkService{
+	s := &MagicLinkService{
 		cfg: cfg, store: store, tenants: tenants, mailer: mailer, limiter: limiter,
-		users: users, account: account,
 		sem: make(chan struct{}, magicLinkMaxInFlight),
 	}
+	if users != nil && account != nil {
+		s.dbAccts = &dbMagicLinkAccounts{cfg: cfg, users: users, account: account}
+		s.accounts = s.dbAccts
+	}
+	return s
+}
+
+// SetAccounts replaces the account backend (tests, hosts).
+func (s *MagicLinkService) SetAccounts(a MagicLinkAccounts) { s.accounts = a }
+
+// WireAccountGuards supplies what the database-backed account backend needs to
+// classify staff, detect password credentials and clear an untrusted account.
+// Until it is called every verify for an existing account fails closed.
+func (s *MagicLinkService) WireAccountGuards(creds *auth_repo.CredentialRepo, factors *auth_repo.FactorRepo, staff StaffFunc) {
+	if s.dbAccts != nil {
+		s.dbAccts.creds, s.dbAccts.factors, s.dbAccts.staff = creds, factors, staff
+	}
+}
+
+// ValidCodeChallenge reports whether c is a well-formed PKCE S256 challenge:
+// the unpadded base64url encoding of a SHA-256 digest (43 characters).
+func ValidCodeChallenge(c string) bool {
+	if len(c) != 43 {
+		return false
+	}
+	for i := 0; i < len(c); i++ {
+		ch := c[i]
+		if !(ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // Wait blocks until every submitted request has finished (tests, shutdown).
@@ -173,6 +227,13 @@ func (s *MagicLinkService) process(ctx context.Context, req MagicLinkRequest) {
 	if security.MagicLinkRedirectAllowed(s.cfg.MagicLink.RedirectAllowlist, req.RedirectTo) {
 		redirect = req.RedirectTo
 	}
+	challenge := ""
+	if s.cfg.MagicLink.CodeFlow {
+		if !ValidCodeChallenge(req.CodeChallenge) {
+			return // the handler already rejects this; never mint a code-flow link without one
+		}
+		challenge = req.CodeChallenge
+	}
 	now := time.Now()
 	rec := &auth_repo.MagicLinkToken{
 		ID:             uuid.New(),
@@ -180,6 +241,7 @@ func (s *MagicLinkService) process(ctx context.Context, req MagicLinkRequest) {
 		OrganizationID: org.ID,
 		Email:          email,
 		RedirectTo:     redirect,
+		CodeChallenge:  challenge,
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(s.ttl()),
 	}
@@ -233,7 +295,10 @@ func (s *MagicLinkService) Verify(ctx context.Context, token, tenant, ip, ua str
 		return nil, ErrMagicLinkInvalid
 	}
 
-	user, created, err := s.findOrCreateUser(ctx, rec.Email, ip, ua)
+	if s.accounts == nil {
+		return nil, ErrMagicLinkInvalid
+	}
+	user, created, err := s.accounts.FindOrCreate(ctx, rec.Email, ip, ua)
 	if err != nil || user == nil {
 		if err != nil {
 			log.Error().Err(err).Msg("magic link: user provisioning failed")
@@ -243,40 +308,176 @@ func (s *MagicLinkService) Verify(ctx context.Context, token, tenant, ip, ua str
 	if user.Status != "active" {
 		return nil, ErrMagicLinkInvalid
 	}
-	if !user.EmailVerified {
-		// The link was delivered to this inbox, which proves ownership.
-		if err := s.account.authSvc.MarkEmailVerified(ctx, user.ID); err != nil {
+	if !created {
+		if !s.accountMayUseMagicLink(ctx, user) {
 			return nil, ErrMagicLinkInvalid
 		}
-		user.EmailVerified = true
+		if !user.EmailVerified {
+			// First proof of inbox ownership: nothing the account held before
+			// (password, sessions, MFA) can be trusted.
+			if err := s.accounts.TakeOver(ctx, user.ID); err != nil {
+				log.Error().Err(err).Msg("magic link: account takeover hardening failed")
+				return nil, ErrMagicLinkInvalid
+			}
+			user.EmailVerified = true
+		}
 	}
 
 	redirect := ""
 	if security.MagicLinkRedirectAllowed(s.cfg.MagicLink.RedirectAllowlist, rec.RedirectTo) {
 		redirect = rec.RedirectTo
 	}
-	return &MagicLinkVerified{User: user, Organization: org, RedirectTo: redirect, Created: created}, nil
+	return &MagicLinkVerified{User: user, Organization: org, RedirectTo: redirect, CodeChallenge: rec.CodeChallenge, Created: created}, nil
 }
 
-func (s *MagicLinkService) findOrCreateUser(ctx context.Context, email, ip, ua string) (*auth.UserAuth, bool, error) {
-	u, err := s.users.GetByEmailFold(ctx, email)
+// accountMayUseMagicLink refuses staff and admin accounts, and accounts with a
+// password credential unless MagicLink.AllowPasswordAccounts is set. Every
+// refusal, and every lookup error, is the same generic failure to the caller.
+func (s *MagicLinkService) accountMayUseMagicLink(ctx context.Context, user *auth.UserAuth) bool {
+	staff, err := s.accounts.IsStaff(ctx, user.ID)
+	if err != nil {
+		log.Error().Err(err).Msg("magic link: staff check failed")
+		return false
+	}
+	if staff {
+		log.Info().Str("user_id", user.ID.String()).Msg("magic link: refused for staff/admin account")
+		return false
+	}
+	if s.cfg.MagicLink.AllowPasswordAccounts {
+		return true
+	}
+	hasPassword, err := s.accounts.HasPassword(ctx, user.ID)
+	if err != nil {
+		log.Error().Err(err).Msg("magic link: credential check failed")
+		return false
+	}
+	if hasPassword {
+		log.Info().Str("user_id", user.ID.String()).Msg("magic link: refused for account with a password")
+		return false
+	}
+	return true
+}
+
+// dbMagicLinkAccounts is the database-backed MagicLinkAccounts.
+type dbMagicLinkAccounts struct {
+	cfg     *apptypes.AppConfig
+	users   *auth_repo.UserAuthRepo
+	account *AccountService
+	creds   *auth_repo.CredentialRepo
+	factors *auth_repo.FactorRepo
+	staff   StaffFunc
+}
+
+var errMagicLinkGuardsUnwired = errors.New("magic link account guards are not configured")
+
+func (d *dbMagicLinkAccounts) FindOrCreate(ctx context.Context, email, ip, ua string) (*auth.UserAuth, bool, error) {
+	u, err := d.users.GetByEmailFold(ctx, email)
 	if err != nil {
 		return nil, false, err
 	}
 	if u != nil {
 		return u, false, nil
 	}
-	if s.cfg.DisablePublicSignup {
+	if d.cfg.DisablePublicSignup {
 		return nil, false, nil
 	}
-	id, err := s.account.CreatePasswordlessAccount(ctx, email, ip, ua)
+	id, err := d.account.CreatePasswordlessAccount(ctx, email, ip, ua)
 	if err != nil {
 		// A concurrent verify for the same new address may have won the insert.
-		if again, e := s.users.GetByEmailFold(ctx, email); e == nil && again != nil {
+		if again, e := d.users.GetByEmailFold(ctx, email); e == nil && again != nil {
 			return again, false, nil
 		}
 		return nil, false, err
 	}
-	u, err = s.users.GetByID(ctx, id)
+	u, err = d.users.GetByID(ctx, id)
 	return u, true, err
+}
+
+func (d *dbMagicLinkAccounts) IsStaff(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if d.staff == nil {
+		return false, errMagicLinkGuardsUnwired
+	}
+	return d.staff(ctx, userID)
+}
+
+func (d *dbMagicLinkAccounts) HasPassword(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if d.creds == nil {
+		return false, errMagicLinkGuardsUnwired
+	}
+	c, err := d.creds.GetByUserID(ctx, userID)
+	return c != nil, err
+}
+
+func (d *dbMagicLinkAccounts) TakeOver(ctx context.Context, userID uuid.UUID) error {
+	if d.creds == nil || d.factors == nil {
+		return errMagicLinkGuardsUnwired
+	}
+	authSvc := d.account.authSvc
+	if _, err := authSvc.RevokeAllSessionsForUser(ctx, userID); err != nil {
+		return err
+	}
+	if err := d.creds.DeleteByUserID(ctx, userID); err != nil {
+		return err
+	}
+	factors, err := d.factors.ListByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, f := range factors {
+		if err := d.factors.Delete(ctx, f.ID, userID); err != nil {
+			return err
+		}
+	}
+	if err := d.factors.DeleteRecoveryCodes(ctx, userID); err != nil {
+		return err
+	}
+	return authSvc.MarkEmailVerified(ctx, userID)
+}
+
+// expiredPurger is implemented by the repositories.
+type expiredPurger interface {
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
+// PurgeExpired deletes expired tokens and codes.
+func (s *MagicLinkService) PurgeExpired(ctx context.Context) {
+	now := time.Now()
+	for name, store := range map[string]any{"tokens": s.store, "codes": s.codes} {
+		p, ok := store.(expiredPurger)
+		if !ok {
+			continue
+		}
+		n, err := p.DeleteExpired(ctx, now)
+		if err != nil {
+			log.Error().Err(err).Str("table", name).Msg("magic link: purge expired failed")
+		} else if n > 0 {
+			log.Debug().Int64("deleted", n).Str("table", name).Msg("magic link: purged expired rows")
+		}
+	}
+}
+
+// StartCleanup purges expired rows now and then every interval until ctx ends.
+// The returned channel closes once the goroutine has exited.
+func (s *MagicLinkService) StartCleanup(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("magic link: cleanup panicked")
+			}
+		}()
+		s.PurgeExpired(ctx)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.PurgeExpired(ctx)
+			}
+		}
+	}()
+	return done
 }

@@ -4,6 +4,18 @@
 
 - Passwordless magic-link sign-in: `POST /magic-link` (always 202) and `GET /magic-link/verify`. Opt in with `MAGIC_LINK_ENABLED=true`; requires tenancy. Tokens are 32 random bytes, stored as SHA-256 only, valid 15 minutes, single use. Per-email and per-IP limits, Resend delivery (dev: link printed to stdout), exact-origin redirect allowlist. Does not create org membership. See docs/magic-link.md.
 - Migration `000007_magic_link_tokens` (Auth DB). New config: `Config.MagicLink`, `MagicLinkMailer`.
+- Magic-link one-time-code flow for apps on another registrable domain: `MAGIC_LINK_CODE_FLOW=true` makes verify redirect with `?code=` instead of setting a cookie, and `POST /magic-link/exchange` (header `X-Authpad-Exchange-Secret` = `MAGIC_LINK_EXCHANGE_SECRET`, per-IP limit `MAGIC_LINK_EXCHANGE_LIMIT`) redeems it server-to-server for a session bearer token. Codes are 32 random bytes, stored as SHA-256 only, valid 60 seconds, single use, bound to session, tenant and redirect origin. Migration `000008_magic_link_codes` (Auth DB). New config: `MagicLink.CodeFlow`, `ExchangeSecret`, `ExchangeLimit`.
+
+- Magic-link security review fixes:
+  - Account takeover: verifying a previously unverified account revokes all its sessions, deletes its password credential and clears its MFA factors and recovery codes. A verified account with no password may now set one through the password reset flow.
+  - Magic link is refused (generic failure) for staff/admin accounts, and for accounts with a password unless `MAGIC_LINK_ALLOW_PASSWORD_ACCOUNTS=true`. New config: `MagicLink.AllowPasswordAccounts`.
+  - `/magic-link/exchange` returns `org_id` and `role` only for active members, plus `is_member`; `org_id` is `null` for non-members.
+  - PKCE for the code flow: `POST /magic-link` requires `code_challenge` (S256) and `/magic-link/exchange` requires `code_verifier`. Migration `000009_magic_link_pkce` adds `code_challenge` to tokens and codes.
+  - `GET /magic-link/verify` now renders a confirmation page and no longer consumes the token; `POST /magic-link/verify` does. The link in the email is unchanged. Hosts that called the GET URL directly must now post the form.
+  - The code flow refuses to start without `MAGIC_LINK_DEFAULT_REDIRECT` or `CALLBACK_URL`, and magic link with any `Env` other than `development` refuses to start without a mail key or custom mailer. The dev mailer is only used when `Env` is `development` and redacts tokens otherwise.
+  - Expired magic-link tokens and codes are purged hourly by a background job.
+  - `X-Forwarded-For` is now ignored unless `TRUSTED_PROXY_CIDRS` (`Security.TrustedProxyCIDRs`) is set and the connection comes from inside it; then the right-most untrusted hop is the client. **Deployments behind a reverse proxy must set it**, or all clients share the proxy's address for rate limits and audit. This applies to every endpoint, not only magic link. `middleware.RateLimiter` takes a new `trusted []*net.IPNet` argument.
+  - Known limitations (per-tenant redirects, shared exchange secret, Redis limiter, in-flight cap) are documented in docs/magic-link.md.
 
 ## 0.3.0
 

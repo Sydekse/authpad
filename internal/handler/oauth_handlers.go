@@ -59,7 +59,7 @@ func (h *OAuthHandlers) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	callbackBaseURL := getCallbackBaseURL(r)
-	ip := parseIPFromRemote(r)
+	ip := clientIP(r, h.Cfg)
 	ua := r.Header.Get("User-Agent")
 	redirectURI, result, err := h.OAuth.Callback(r.Context(), provider, code, state, callbackBaseURL, ip, ua)
 	if err != nil {

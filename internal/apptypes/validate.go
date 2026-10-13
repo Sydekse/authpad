@@ -17,6 +17,9 @@ func (c *AppConfig) Validate() error {
 	if c.Invitations.Enabled && c.IdPDatabaseURL == "" {
 		return errors.New("Invitations.Enabled requires IdPDatabaseURL")
 	}
+	if _, err := ParseCIDRs(c.Security.TrustedProxyCIDRs); err != nil {
+		return fmt.Errorf("Security.TrustedProxyCIDRs: %w", err)
+	}
 	if c.MagicLink.Enabled {
 		if !c.Tenancy.Enabled {
 			return errors.New("MagicLink.Enabled requires Tenancy.Enabled")
@@ -25,8 +28,30 @@ func (c *AppConfig) Validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return errors.New("MagicLink.BaseURL must be an absolute http(s) URL")
 		}
-		if c.Env == "production" && c.MagicLink.Mailer == nil && c.Email.ResendAPIKey == "" {
-			return errors.New("MagicLink requires RESEND_API_KEY (or a custom MagicLink.Mailer) in production")
+		if c.MagicLink.CodeFlow {
+			if c.MagicLink.ExchangeSecret == "" {
+				return errors.New("MagicLink.CodeFlow requires MagicLink.ExchangeSecret")
+			}
+			if c.Env == "production" && len(c.MagicLink.ExchangeSecret) < 32 {
+				return errors.New("MagicLink.ExchangeSecret must be at least 32 characters in production")
+			}
+			// Verify burns the token before it needs a destination, so refuse to
+			// start rather than spend links with nowhere to send the code.
+			dest := strings.TrimSpace(c.MagicLink.DefaultRedirectURL)
+			if dest == "" {
+				dest = strings.TrimSpace(c.Pages.CallbackURL)
+			}
+			if dest == "" {
+				return errors.New("MagicLink.CodeFlow requires MagicLink.DefaultRedirectURL or Pages.CallbackURL")
+			}
+			du, err := url.Parse(dest)
+			if err != nil || (du.Scheme != "http" && du.Scheme != "https") || du.Host == "" {
+				return errors.New("MagicLink code flow redirect (MagicLink.DefaultRedirectURL / Pages.CallbackURL) must be an absolute http(s) URL")
+			}
+		}
+		// Only an explicit development environment may fall back to printing links.
+		if c.Env != "development" && c.MagicLink.Mailer == nil && c.Email.ResendAPIKey == "" {
+			return errors.New("MagicLink requires RESEND_API_KEY (or a custom MagicLink.Mailer) unless Env is \"development\"")
 		}
 	}
 	if c.Env != "production" {

@@ -344,6 +344,25 @@ func (s *AuthService) RotateSession(ctx context.Context, sess *auth.Session) (st
 	return token, sess, nil
 }
 
+// IssueSessionToken replaces the bearer token of a live session with a fresh
+// one and returns it. The previous token stops working. Expiry is unchanged.
+// Used by the magic-link code exchange, which never has the original token
+// (only its hash is stored).
+func (s *AuthService) IssueSessionToken(ctx context.Context, sessionID uuid.UUID) (token string, userID uuid.UUID, expiresAt time.Time, mfaPending bool, err error) {
+	token, err = security.GenerateOpaqueToken()
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, false, err
+	}
+	userID, expiresAt, mfaPending, ok, err := s.sessionRepo.IssueToken(ctx, sessionID, security.HashToken(token))
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, false, err
+	}
+	if !ok {
+		return "", uuid.Nil, time.Time{}, false, ErrSessionNotFound
+	}
+	return token, userID, expiresAt, mfaPending, nil
+}
+
 func (s *AuthService) RevokeSession(ctx context.Context, sessionID uuid.UUID) error {
 	return s.sessionRepo.RevokeByID(ctx, sessionID)
 }
@@ -365,7 +384,13 @@ func (s *AuthService) CreatePasswordResetToken(ctx context.Context, email string
 		return "", nil
 	}
 	cred, err := s.credRepo.GetByUserID(ctx, u.ID)
-	if err != nil || cred == nil {
+	if err != nil {
+		return "", nil
+	}
+	// An account without a password (magic-link or OAuth sign-up, or one whose
+	// password was removed when a magic link took it over) can set one through a
+	// reset, but only once its address is verified.
+	if cred == nil && !u.EmailVerified {
 		return "", nil
 	}
 	rawToken, err := security.GenerateOpaqueToken()
@@ -397,15 +422,25 @@ func (s *AuthService) ResetPassword(ctx context.Context, rawToken, newPassword s
 		return ErrResetTokenInvalid
 	}
 	cred, err := s.credRepo.GetByUserID(ctx, t.UserID)
-	if err != nil || cred == nil {
+	if err != nil {
 		return ErrNoPasswordCredential
 	}
-	hash, err := s.password.Hash(newPassword)
-	if err != nil {
-		return err
-	}
-	if err := s.credRepo.UpdateHash(ctx, cred.ID, hash, 2); err != nil {
-		return err
+	if cred == nil {
+		u, err := s.userRepo.GetByID(ctx, t.UserID)
+		if err != nil || u == nil || !u.EmailVerified {
+			return ErrNoPasswordCredential
+		}
+		if err := s.CreateCredential(ctx, t.UserID, newPassword); err != nil {
+			return err
+		}
+	} else {
+		hash, err := s.password.Hash(newPassword)
+		if err != nil {
+			return err
+		}
+		if err := s.credRepo.UpdateHash(ctx, cred.ID, hash, 2); err != nil {
+			return err
+		}
 	}
 	return s.resetTokenRepo.DeleteByID(ctx, t.ID)
 }

@@ -16,6 +16,7 @@ type MagicLinkToken struct {
 	OrganizationID uuid.UUID
 	Email          string
 	RedirectTo     string
+	CodeChallenge  string // PKCE S256 challenge; empty unless the code flow is on
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 }
@@ -31,9 +32,9 @@ func NewMagicLinkRepo(db *database.AuthDB) *MagicLinkRepo {
 
 func (r *MagicLinkRepo) Create(ctx context.Context, t *MagicLinkToken) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO magic_link_tokens (id, token_hash, organization_id, email, redirect_to, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, t.ID, t.TokenHash, t.OrganizationID, t.Email, t.RedirectTo, t.CreatedAt, t.ExpiresAt)
+		INSERT INTO magic_link_tokens (id, token_hash, organization_id, email, redirect_to, code_challenge, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, t.ID, t.TokenHash, t.OrganizationID, t.Email, t.RedirectTo, t.CodeChallenge, t.CreatedAt, t.ExpiresAt)
 	return err
 }
 
@@ -46,8 +47,8 @@ func (r *MagicLinkRepo) Consume(ctx context.Context, tokenHash string, orgID *uu
 		UPDATE magic_link_tokens SET consumed_at = NOW()
 		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()
 		  AND ($2::uuid IS NULL OR organization_id = $2::uuid)
-		RETURNING id, token_hash, organization_id, email, redirect_to, created_at, expires_at
-	`, tokenHash, orgID).Scan(&t.ID, &t.TokenHash, &t.OrganizationID, &t.Email, &t.RedirectTo, &t.CreatedAt, &t.ExpiresAt)
+		RETURNING id, token_hash, organization_id, email, redirect_to, code_challenge, created_at, expires_at
+	`, tokenHash, orgID).Scan(&t.ID, &t.TokenHash, &t.OrganizationID, &t.Email, &t.RedirectTo, &t.CodeChallenge, &t.CreatedAt, &t.ExpiresAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

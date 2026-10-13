@@ -64,7 +64,7 @@ func (h *AuthHandlers) Signup(w http.ResponseWriter, r *http.Request) {
 		profile["name"] = req.Name
 	}
 
-	ip := parseIPFromRemote(r)
+	ip := clientIP(r, h.Cfg)
 	ua := r.Header.Get("User-Agent")
 
 	result, err := h.Account.CreateAccount(r.Context(), service.CreateAccountRequest{
@@ -158,7 +158,7 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := parseIPFromRemote(r)
+	ip := clientIP(r, h.Cfg)
 	ua := r.Header.Get("User-Agent")
 	ttl := h.Cfg.Session.TTL
 	if req.RememberMe {
@@ -314,7 +314,7 @@ func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
 		if sess, _ := h.Auth.GetSessionByToken(r.Context(), token); sess != nil {
 			_ = h.Auth.RevokeSession(r.Context(), sess.ID)
 			if h.Audit != nil {
-				h.Audit.LogAuth(r.Context(), &sess.UserID, "logout", parseIPFromRemote(r), r.Header.Get("User-Agent"), nil)
+				h.Audit.LogAuth(r.Context(), &sess.UserID, "logout", clientIP(r, h.Cfg), r.Header.Get("User-Agent"), nil)
 			}
 		}
 	}
@@ -328,7 +328,7 @@ func (h *AuthHandlers) LogoutAll(w http.ResponseWriter, r *http.Request) {
 		if sess, _ := h.Auth.GetSessionByToken(r.Context(), token); sess != nil {
 			_, _ = h.Auth.RevokeAllSessionsForUser(r.Context(), sess.UserID)
 			if h.Audit != nil {
-				h.Audit.LogAuth(r.Context(), &sess.UserID, "logout.all", parseIPFromRemote(r), r.Header.Get("User-Agent"), nil)
+				h.Audit.LogAuth(r.Context(), &sess.UserID, "logout.all", clientIP(r, h.Cfg), r.Header.Get("User-Agent"), nil)
 			}
 		}
 	}
