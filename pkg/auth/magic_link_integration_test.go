@@ -305,7 +305,7 @@ func TestMagicLinkSimultaneousFirstSignInSameEmail(t *testing.T) {
 func TestMagicLinkEnumerationIdenticalResponses(t *testing.T) {
 	e := newMagicEnv(t)
 	existing := uniqueEmail()
-	if _, err := e.a.CreateAccount(context.Background(), auth.CreateAccountRequest{Email: strings.ToLower(existing), Password: "password1", SkipSession: true}, "127.0.0.1", "t"); err != nil {
+	if _, err := e.a.CreateAccount(context.Background(), auth.CreateAccountRequest{Profile: map[string]any{"name": "Test User"}, Email: strings.ToLower(existing), Password: "password1", SkipSession: true}, "127.0.0.1", "t"); err != nil {
 		t.Fatal(err)
 	}
 	c1, b1 := e.request(t, existing, e.org.Slug, "")
@@ -321,7 +321,7 @@ func TestMagicLinkExistingUserKeepsAccountAndActivatesOrg(t *testing.T) {
 	e := newMagicEnv(t)
 	ctx := context.Background()
 	email := strings.ToLower(uniqueEmail())
-	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
+	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Profile: map[string]any{"name": "Test User"}, Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestMagicLinkLockedAccountRejected(t *testing.T) {
 	e := newMagicEnv(t)
 	ctx := context.Background()
 	email := strings.ToLower(uniqueEmail())
-	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
+	res, err := e.a.CreateAccount(ctx, auth.CreateAccountRequest{Profile: map[string]any{"name": "Test User"}, Email: email, Password: "password1", SkipSession: true}, "127.0.0.1", "t")
 	if err != nil {
 		t.Fatal(err)
 	}
