@@ -29,6 +29,7 @@ type Server struct {
 	mfa        *handler.MFAHandlers
 	invites    *handler.InviteHandlers
 	orgs       *handler.OrgHandlers
+	magic      *handler.MagicLinkHandlers
 	authDB     *database.AuthDB
 	idpDB      *database.IdPDB
 	AuthSvc    *service.AuthService
@@ -154,6 +155,19 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 	authSvc.SetStaffFunc(staffClassifier(cfg, idpSvc, orgSvc))
 	oauthSvc := service.NewOAuthService(&cfg, authSvc, idpSvc, mfaSvc, userAuthRepo, oauthRepo, oauthStateRepo, auditSvc, orgSvc)
 
+	var magicHandlers *handler.MagicLinkHandlers
+	if cfg.MagicLink.Enabled && orgSvc != nil {
+		var limiter security.WindowLimiter = security.NewMemoryWindowLimiter()
+		if cfg.Security.RedisURL != "" {
+			if rl := security.NewRedisWindowLimiter(cfg.Security.RedisURL); rl != nil {
+				limiter = rl
+			}
+		}
+		linkSvc := service.NewMagicLinkService(&cfg, auth_repo.NewMagicLinkRepo(authDB), orgSvc,
+			service.NewMagicLinkMailer(&cfg), limiter, userAuthRepo, accountSvc)
+		magicHandlers = &handler.MagicLinkHandlers{Links: linkSvc, Auth: authSvc, MFA: mfaSvc, Audit: auditSvc, Orgs: orgSvc, Cfg: &cfg}
+	}
+
 	srv := &Server{
 		cfg:        cfg,
 		authDB:     authDB,
@@ -186,6 +200,7 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 		oauth: &handler.OAuthHandlers{OAuth: oauthSvc, Cfg: &cfg},
 		admin: &handler.AdminHandlers{IdP: idpSvc, Auth: authSvc, Audit: auditSvc, Cfg: &cfg},
 		mfa:   &handler.MFAHandlers{MFA: mfaSvc, Auth: authSvc, Cfg: &cfg},
+		magic: magicHandlers,
 	}
 	if inviteSvc != nil {
 		srv.invites = &handler.InviteHandlers{Invites: inviteSvc, Email: mailer, Auth: authSvc, IdP: idpSvc, Cfg: &cfg}
@@ -198,6 +213,9 @@ func New(cfg apptypes.AppConfig) (*Server, error) {
 
 // Close releases database connections.
 func (s *Server) Close() {
+	if s.magic != nil {
+		s.magic.Links.Wait()
+	}
 	if s.authDB != nil {
 		s.authDB.Close()
 	}
@@ -243,6 +261,12 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 	})
 
 	r.Route(basePath, func(r chi.Router) {
+		if s.magic != nil && !s.skipPath("/magic-link") {
+			// No rateLimit/csrf on the request route: it carries its own per-email and
+			// per-IP limits and must answer 202 when limited. It sets no session.
+			r.Post("/magic-link", s.magic.Request)
+			r.With(rateLimit).Get("/magic-link/verify", s.magic.Verify)
+		}
 		if !s.cfg.DisablePublicSignup && !s.skipPath("/auth/signup") {
 			r.With(rateLimit).Post("/auth/signup", s.auth.Signup)
 		}
