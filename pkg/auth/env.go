@@ -41,6 +41,19 @@ func LoadFromEnv() Config {
 	cfg.Email.ResendFrom = os.Getenv("RESEND_FROM")
 	cfg.Email.RequireVerification = os.Getenv("REQUIRE_EMAIL_VERIFICATION") == "true"
 	cfg.Email.AppName = getEnv("APP_NAME", "Auth")
+	cfg.Email.Brand = EmailBrand{
+		HeaderColor:       os.Getenv("EMAIL_HEADER_COLOR"),
+		ButtonColor:       os.Getenv("EMAIL_BUTTON_COLOR"),
+		LogoURL:           os.Getenv("EMAIL_LOGO_URL"),
+		LogoWidth:         getEnvInt("EMAIL_LOGO_WIDTH", 0),
+		LogoHeight:        getEnvInt("EMAIL_LOGO_HEIGHT", 0),
+		FontFamily:        os.Getenv("EMAIL_FONT_FAMILY"),
+		HeadingFontFamily: os.Getenv("EMAIL_HEADING_FONT_FAMILY"),
+		FooterText:        os.Getenv("EMAIL_FOOTER_TEXT"),
+		OrgInviteTitle:    os.Getenv("EMAIL_ORG_INVITE_TITLE"),
+		OrgInviteBody:     os.Getenv("EMAIL_ORG_INVITE_BODY"),
+		OrgInviteButton:   os.Getenv("EMAIL_ORG_INVITE_BUTTON"),
+	}
 
 	cfg.Pages.SignInURL = os.Getenv("SIGN_IN_URL")
 	cfg.Pages.SignUpURL = os.Getenv("SIGN_UP_URL")
@@ -91,6 +104,11 @@ func LoadFromEnv() Config {
 	cfg.DisablePublicSignup = os.Getenv("DISABLE_PUBLIC_SIGNUP") == "true"
 	cfg.Invitations.Enabled = os.Getenv("AUTHPAD_INVITATIONS_ENABLED") == "true"
 	cfg.Invitations.TTL = getEnvDuration("AUTHPAD_INVITE_TTL", 7*24*time.Hour)
+	for _, o := range strings.Split(os.Getenv("AUTHPAD_INVITE_CALLBACK_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			cfg.Invitations.CallbackOrigins = append(cfg.Invitations.CallbackOrigins, o)
+		}
+	}
 	cfg.Tenancy.Enabled = os.Getenv("AUTHPAD_TENANCY_ENABLED") == "true"
 	cfg.Tenancy.AllowPersonalAccounts = os.Getenv("AUTHPAD_TENANCY_PERSONAL") != "false"
 	cfg.Tenancy.AllowCreateOrganization = os.Getenv("AUTHPAD_TENANCY_CREATE_ORG") != "false"

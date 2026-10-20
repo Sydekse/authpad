@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
@@ -188,20 +189,24 @@ func (h *OrgHandlers) Invite(w http.ResponseWriter, r *http.Request) {
 		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
 		return
 	}
+	inviteURL, ok := inviteCallbackURL(body.CallbackURL, h.Cfg)
+	if !ok {
+		apierror.BadRequest(w, "INVALID_CALLBACK_URL", "callback_url must be an http(s) URL on an allowed origin")
+		return
+	}
 	token, inv, err := h.Orgs.Invite(r.Context(), chi.URLParam(r, "slug"), *userID, body.Email, body.Role, body.Payload)
 	if err != nil {
 		writeOrgErr(w, err)
 		return
 	}
-	inviteURL := strings.TrimRight(body.CallbackURL, "/")
 	if inviteURL != "" {
 		sep := "?"
 		if strings.Contains(inviteURL, "?") {
 			sep = "&"
 		}
-		inviteURL = inviteURL + sep + "token=" + token
+		inviteURL = inviteURL + sep + "token=" + url.QueryEscape(token)
 		if h.Email != nil {
-			_ = h.Email.SendInvitation(body.Email, inviteURL, body.Role)
+			sendOrgInvitation(r, h.Email, h.Orgs, chi.URLParam(r, "slug"), inv.ID, inv.Email, inviteURL, inv.Role, inv.ExpiresAt)
 		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -469,7 +474,7 @@ func (h *OrgHandlers) ListInvitations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OrgHandlers) ValidateInvite(w http.ResponseWriter, r *http.Request) {
-	token := chi.URLParam(r, "token")
+	token := tokenParam(r)
 	if token == "" {
 		apierror.BadRequest(w, "INVALID_TOKEN", "Token is required")
 		return
