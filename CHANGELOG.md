@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Branded transactional emails. Invites, magic links, password reset and verification share one light, table-based layout with a coloured header band, optional logo, rounded button, plain-text alternative and dark-mode support. Configure with `EMAIL_HEADER_COLOR`, `EMAIL_BUTTON_COLOR`, `EMAIL_LOGO_URL`, `EMAIL_LOGO_WIDTH`, `EMAIL_FONT_FAMILY`, `EMAIL_HEADING_FONT_FAMILY`, `EMAIL_FOOTER_TEXT` and `EMAIL_ORG_INVITE_TITLE` / `_BODY` / `_BUTTON` (`Config.Email.Brand`). See docs/emails.md. The "Identity" label, "© Sydek" footer and role names ("as admin") are gone from emails.
+- Organization invites name the organization. New optional `OrgInvitationMailer` interface; existing `Mailer` implementations are unaffected.
+- Invite, reset and verification links percent-encode the token, and `GET /invitations/{token}/validate` and `GET /organizations/invitations/{token}/validate` accept a percent-encoded token. Before, a token whose `=` padding was sent as `%3D` never matched.
+- Failed invite emails are logged (without the link) instead of being dropped silently.
+- **Behaviour change:** an invite `callback_url` must be on an allowed origin (`AUTHPAD_INVITE_CALLBACK_ORIGINS`, falling back to `ALLOWED_ORIGINS`, `MAGIC_LINK_REDIRECT_ALLOWLIST` and the hosted page origins). Other URLs, and non-http(s) schemes, now return `400 INVALID_CALLBACK_URL`.
+- Email copy quotes the real link lifetimes (`PasswordResetTTL`, `EmailVerificationTTL`, `MAGIC_LINK_TTL`, the invite TTL).
+
 - Passwordless magic-link sign-in: `POST /magic-link` (always 202) and `GET /magic-link/verify`. Opt in with `MAGIC_LINK_ENABLED=true`; requires tenancy. Tokens are 32 random bytes, stored as SHA-256 only, valid 15 minutes, single use. Per-email and per-IP limits, Resend delivery (dev: link printed to stdout), exact-origin redirect allowlist. Does not create org membership. See docs/magic-link.md.
 - Migration `000007_magic_link_tokens` (Auth DB). New config: `Config.MagicLink`, `MagicLinkMailer`.
 - Magic-link one-time-code flow for apps on another registrable domain: `MAGIC_LINK_CODE_FLOW=true` makes verify redirect with `?code=` instead of setting a cookie, and `POST /magic-link/exchange` (header `X-Authpad-Exchange-Secret` = `MAGIC_LINK_EXCHANGE_SECRET`, per-IP limit `MAGIC_LINK_EXCHANGE_LIMIT`) redeems it server-to-server for a session bearer token. Codes are 32 random bytes, stored as SHA-256 only, valid 60 seconds, single use, bound to session, tenant and redirect origin. Migration `000008_magic_link_codes` (Auth DB). New config: `MagicLink.CodeFlow`, `ExchangeSecret`, `ExchangeLimit`.

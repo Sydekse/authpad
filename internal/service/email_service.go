@@ -2,7 +2,10 @@ package service
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
 	"github.com/resend/resend-go/v3"
@@ -12,39 +15,63 @@ import (
 type EmailService struct {
 	cfg   apptypes.EmailConfig
 	pages apptypes.PagesConfig
+	// deliver replaces the Resend call in tests.
+	deliver func(to, subject, htmlBody, textBody string) error
 }
 
 func NewEmailService(cfg apptypes.EmailConfig, pages apptypes.PagesConfig) *EmailService {
 	return &EmailService{cfg: cfg, pages: pages}
 }
 
+// Lifetimes of the links in password reset and verification emails. The
+// emails quote them, so they live here next to the copy.
+const (
+	PasswordResetTTL     = 5 * time.Minute
+	EmailVerificationTTL = 24 * time.Hour
+)
+
+// lifetime words a fixed link lifetime, for example "5 minutes".
+func lifetime(d time.Duration) string {
+	now := time.Now()
+	return expiresIn(now.Add(d), now)
+}
+
+func (s *EmailService) brand() mailBrand {
+	return resolveBrand(s.appName(), s.cfg.Brand)
+}
+
 func (s *EmailService) SendPasswordReset(to, resetURL string) error {
-	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
-		Preview:     fmt.Sprintf("Reset your %s password", s.appName()),
-		Eyebrow:     "Security",
+	b := s.brand()
+	subject := fmt.Sprintf("Reset your %s password", b.App)
+	htmlBody, textBody := renderMail(b, mailContent{
+		Preview:     fmt.Sprintf("Choose a new password with the link inside. It expires in %s.", lifetime(PasswordResetTTL)),
 		Title:       "Reset your password",
-		Intro:       fmt.Sprintf("We received a request to reset the password for your %s account. Use the button below to choose a new one.", s.appName()),
+		Intro:       fmt.Sprintf("We got a request to reset the password for your %s account. Use the link below to choose a new one.", b.App),
 		ActionURL:   resetURL,
-		ActionLabel: "Reset password",
-		Note:        "This link expires in 5 minutes. If you did not request a reset, you can ignore this email.",
+		ActionLabel: "Choose a new password",
+		Note:        fmt.Sprintf("This link expires in %s. If you didn't ask to reset your password, you can ignore this email and nothing will change.", lifetime(PasswordResetTTL)),
 	})
-	return s.send(to, fmt.Sprintf("Reset your %s password", s.appName()), htmlBody, textBody)
+	return s.send(to, subject, htmlBody, textBody)
 }
 
 func (s *EmailService) SendEmailVerification(to, verifyURL string) error {
-	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
-		Preview:     fmt.Sprintf("Verify your email for %s", s.appName()),
-		Eyebrow:     "Email verification",
+	b := s.brand()
+	subject := fmt.Sprintf("Confirm your email for %s", b.App)
+	htmlBody, textBody := renderMail(b, mailContent{
+		Preview:     fmt.Sprintf("One click to finish setting up your %s account.", b.App),
 		Title:       "Confirm your email address",
-		Intro:       fmt.Sprintf("Thanks for creating a %s account. Confirm your email to activate it and sign in.", s.appName()),
+		Intro:       fmt.Sprintf("Thanks for signing up to %s. Confirm this is your email address and you're ready to sign in.", b.App),
 		ActionURL:   verifyURL,
-		ActionLabel: "Verify email",
-		Note:        "This link expires in 24 hours. If you did not create an account, you can ignore this email.",
+		ActionLabel: "Confirm email",
+		Note:        fmt.Sprintf("This link expires in %s. If you didn't sign up, you can ignore this email.", lifetime(EmailVerificationTTL)),
 	})
-	return s.send(to, fmt.Sprintf("Verify your %s email", s.appName()), htmlBody, textBody)
+	return s.send(to, subject, htmlBody, textBody)
 }
 
 func (s *EmailService) send(to, subject, htmlBody, textBody string) error {
+	if s.deliver != nil {
+		return s.deliver(to, subject, htmlBody, textBody)
+	}
 	if s.cfg.ResendAPIKey == "" || s.cfg.ResendFrom == "" {
 		return nil
 	}
@@ -59,25 +86,57 @@ func (s *EmailService) send(to, subject, htmlBody, textBody string) error {
 	return err
 }
 
+// SendInvitation sends a platform invite. The role is not shown: role names
+// are internal and mean nothing to the person invited.
 func (s *EmailService) SendInvitation(to, inviteURL, role string) error {
-	htmlBody, textBody := renderSydekMail(s.appName(), mailContent{
-		Preview:     fmt.Sprintf("You're invited to %s", s.appName()),
-		Eyebrow:     "Invitation",
-		Title:       "You've been invited",
-		Intro:       fmt.Sprintf("You have been invited to join %s%s. Use the button below to accept.", s.appName(), roleSuffix(role)),
+	b := s.brand()
+	subject := fmt.Sprintf("You've been invited to %s", b.App)
+	htmlBody, textBody := renderMail(b, mailContent{
+		Preview:     fmt.Sprintf("Accept your invite to set up your %s account.", b.App),
+		Title:       fmt.Sprintf("You've been invited to %s", b.App),
+		Intro:       "Use the link below to accept the invite and set up your account.",
 		ActionURL:   inviteURL,
-		ActionLabel: "Accept invitation",
-		Note:        "If you were not expecting this invitation, you can ignore this email.",
+		ActionLabel: "Accept invite",
+		Note:        "This link works once. If you weren't expecting this invite, you can ignore this email.",
 	})
-	return s.send(to, fmt.Sprintf("You're invited to %s", s.appName()), htmlBody, textBody)
+	return s.send(to, subject, htmlBody, textBody)
 }
 
-func roleSuffix(role string) string {
-	role = strings.TrimSpace(role)
-	if role == "" {
-		return ""
+// SendOrgInvitation implements apptypes.OrgInvitationMailer.
+func (s *EmailService) SendOrgInvitation(msg apptypes.OrgInvitationEmail) error {
+	subject, htmlBody, textBody := renderOrgInvitation(s.brand(), msg, time.Now())
+	return s.send(msg.To, subject, htmlBody, textBody)
+}
+
+// cleanOrgName keeps an organization name to one short line, so an org admin
+// cannot write a paragraph into a branded subject and heading.
+func cleanOrgName(name string) string {
+	name = strings.Join(strings.FieldsFunc(name, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+	if r := []rune(name); len(r) > maxOrgNameInEmail {
+		name = strings.TrimSpace(string(r[:maxOrgNameInEmail-1])) + "\u2026"
 	}
-	return " as " + role
+	return name
+}
+
+const maxOrgNameInEmail = 80
+
+func renderOrgInvitation(b mailBrand, msg apptypes.OrgInvitationEmail, now time.Time) (subject, htmlBody, textBody string) {
+	org := cleanOrgName(msg.OrgName)
+	title := b.fill(b.InviteTitle, org)
+	note := "This link works once."
+	if left := expiresIn(msg.ExpiresAt, now); left != "" {
+		note = fmt.Sprintf("This link works once and expires in %s.", left)
+	}
+	note += " If you weren't expecting this invite, you can ignore this email."
+	htmlBody, textBody = renderMail(b, mailContent{
+		Preview:     b.fill(b.InviteBody, org),
+		Title:       title,
+		Intro:       b.fill(b.InviteBody, org),
+		ActionURL:   msg.InviteURL,
+		ActionLabel: b.InviteButton,
+		Note:        note,
+	})
+	return title, htmlBody, textBody
 }
 
 func (s *EmailService) appName() string {
@@ -109,11 +168,11 @@ func BuildVerifyURL(pages apptypes.PagesConfig, token string) string {
 func appendToken(base, fallback, token string) string {
 	base = strings.TrimSuffix(base, "/")
 	if base == "" {
-		return fallback + "?token=" + token
+		return fallback + "?token=" + url.QueryEscape(token)
 	}
 	sep := "?"
 	if strings.Contains(base, "?") {
 		sep = "&"
 	}
-	return base + sep + "token=" + token
+	return base + sep + "token=" + url.QueryEscape(token)
 }

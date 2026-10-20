@@ -23,25 +23,21 @@ type ResendMagicLinkMailer struct {
 	APIKey  string
 	From    string
 	AppName string
+	// Brand styles the email; zero value uses the neutral defaults.
+	Brand apptypes.EmailBrand
+	// TTL is the link lifetime quoted in the email; 0 says "expires soon".
+	TTL time.Duration
 	// Endpoint defaults to the Resend emails URL; tests point it at httptest.
 	Endpoint string
 	Client   *http.Client
 }
 
 func (m *ResendMagicLinkMailer) SendMagicLink(ctx context.Context, to, linkURL string) error {
-	htmlBody, textBody := renderSydekMail(m.AppName, mailContent{
-		Preview:     fmt.Sprintf("Your %s sign-in link", m.AppName),
-		Eyebrow:     "Sign in",
-		Title:       "Sign in to " + m.AppName,
-		Intro:       "Use the button below to sign in. No password needed.",
-		ActionURL:   linkURL,
-		ActionLabel: "Sign in",
-		Note:        "This link expires soon and works once. If you did not request it, you can ignore this email.",
-	})
+	subject, htmlBody, textBody := magicLinkMail(resolveBrand(m.AppName, m.Brand), linkURL, m.TTL)
 	payload, err := json.Marshal(map[string]any{
 		"from":    m.From,
 		"to":      []string{to},
-		"subject": fmt.Sprintf("Your %s sign-in link", m.AppName),
+		"subject": subject,
 		"html":    htmlBody,
 		"text":    textBody,
 	})
@@ -72,6 +68,29 @@ func (m *ResendMagicLinkMailer) SendMagicLink(ctx context.Context, to, linkURL s
 		return fmt.Errorf("resend returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func magicLinkMail(b mailBrand, linkURL string, ttl time.Duration) (subject, htmlBody, textBody string) {
+	expiry := "expires soon"
+	if ttl > 0 {
+		expiry = "expires in " + lifetime(ttl)
+	}
+	htmlBody, textBody = renderMail(b, mailContent{
+		Preview:     "Use the link inside to sign in. No password needed.",
+		Title:       "Sign in to " + b.App,
+		Intro:       "Use the link below to sign in. You don't need a password.",
+		ActionURL:   linkURL,
+		ActionLabel: "Sign in",
+		Note:        "This link works once and " + expiry + ". If you didn't ask to sign in, you can ignore this email.",
+	})
+	return fmt.Sprintf("Your %s sign-in link", b.App), htmlBody, textBody
+}
+
+func magicTTL(ttl time.Duration) time.Duration {
+	if ttl > 0 {
+		return ttl
+	}
+	return DefaultMagicLinkTTL
 }
 
 // DevMagicLinkMailer prints the link instead of sending it. It is only used
@@ -135,7 +154,7 @@ func NewMagicLinkMailer(cfg *apptypes.AppConfig) apptypes.MagicLinkMailer {
 		if app == "" {
 			app = "Auth"
 		}
-		return &ResendMagicLinkMailer{APIKey: cfg.Email.ResendAPIKey, From: from, AppName: app}
+		return &ResendMagicLinkMailer{APIKey: cfg.Email.ResendAPIKey, From: from, AppName: app, Brand: cfg.Email.Brand, TTL: magicTTL(cfg.MagicLink.TTL)}
 	}
 	if cfg.Env == "development" {
 		return &DevMagicLinkMailer{PrintToken: true}

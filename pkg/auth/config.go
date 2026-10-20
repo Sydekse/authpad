@@ -25,6 +25,10 @@ type (
 	Mailer           = apptypes.Mailer
 	MagicLinkConfig  = apptypes.MagicLinkConfig
 	MagicLinkMailer  = apptypes.MagicLinkMailer
+	EmailBrand       = apptypes.EmailBrand
+
+	OrgInvitationEmail  = apptypes.OrgInvitationEmail
+	OrgInvitationMailer = apptypes.OrgInvitationMailer
 )
 
 const (

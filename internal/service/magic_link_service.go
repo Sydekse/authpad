@@ -197,8 +197,11 @@ func (s *MagicLinkService) ttl() time.Duration {
 	if s.cfg.MagicLink.TTL > 0 {
 		return s.cfg.MagicLink.TTL
 	}
-	return 15 * time.Minute
+	return DefaultMagicLinkTTL
 }
+
+// DefaultMagicLinkTTL applies when MagicLink.TTL is not set.
+const DefaultMagicLinkTTL = 15 * time.Minute
 
 func (s *MagicLinkService) process(ctx context.Context, req MagicLinkRequest) {
 	email, emailOK := NormalizeEmail(req.Email)

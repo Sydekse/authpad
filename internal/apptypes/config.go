@@ -69,6 +69,56 @@ type EmailConfig struct {
 	ResendFrom          string
 	RequireVerification bool
 	AppName             string
+	// Brand styles every built-in transactional email (invites, magic links,
+	// password reset, verification). Empty fields fall back to neutral defaults.
+	Brand EmailBrand
+}
+
+// EmailBrand is the per-deployment look and copy of the built-in emails.
+// Colours must be hex (#rgb or #rrggbb); anything else falls back to the
+// default. Copy templates may use {app} and {org} placeholders.
+type EmailBrand struct {
+	// HeaderColor fills the band at the top of the card.
+	HeaderColor string
+	// ButtonColor is the call-to-action background. Text on it is white.
+	ButtonColor string
+	// LogoURL is an absolute https URL to a PNG or JPG drawn on HeaderColor
+	// (use light artwork on a dark band). Without it the band shows AppName.
+	LogoURL string
+	// LogoWidth is the displayed logo width in CSS pixels (default 132).
+	LogoWidth int
+	// LogoHeight is the displayed logo height in CSS pixels. Set it to keep
+	// the band's height when images are off (Outlook); 0 omits it.
+	LogoHeight int
+	// FontFamily is the body font stack. Email clients rarely load web fonts,
+	// so end it with system fallbacks.
+	FontFamily string
+	// HeadingFontFamily is the heading font stack (default FontFamily).
+	HeadingFontFamily string
+	// FooterText is the line under the card (default "Sent by {app}.").
+	FooterText string
+	// OrgInviteTitle, OrgInviteBody and OrgInviteButton word organization
+	// invites. Defaults: "You've been invited to join {org} on {app}",
+	// "Accept the invite to join the {org} team on {app}." and "Accept invite".
+	OrgInviteTitle  string
+	OrgInviteBody   string
+	OrgInviteButton string
+}
+
+// OrgInvitationEmail describes one organization invite email.
+type OrgInvitationEmail struct {
+	To        string
+	InviteURL string
+	OrgName   string
+	Role      string
+	ExpiresAt time.Time
+}
+
+// OrgInvitationMailer is an optional extension of Mailer. When the configured
+// Mailer implements it, organization invites name the organization instead of
+// the member role. Existing Mailer implementations keep working unchanged.
+type OrgInvitationMailer interface {
+	SendOrgInvitation(msg OrgInvitationEmail) error
 }
 
 // MagicLinkMailer delivers passwordless sign-in links. It is separate from
@@ -213,6 +263,10 @@ type AppConfig struct {
 type InvitationConfig struct {
 	Enabled bool
 	TTL     time.Duration
+	// CallbackOrigins are the exact origins (scheme://host[:port]) an invite
+	// request's callback_url may point at. Empty uses AllowedOrigins, the
+	// magic-link redirect allowlist and the origins of the Pages URLs.
+	CallbackOrigins []string
 }
 
 type TenancyConfig struct {

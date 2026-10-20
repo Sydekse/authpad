@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Sydekse/authpad/internal/apptypes"
@@ -11,6 +12,7 @@ import (
 	"github.com/Sydekse/authpad/pkg/apierror"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type InviteHandlers struct {
@@ -44,12 +46,16 @@ func (h *InviteHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		apierror.BadRequest(w, "INVALID_BODY", "Invalid JSON body")
 		return
 	}
+	inviteURL, ok := inviteCallbackURL(body.CallbackURL, h.Cfg)
+	if !ok {
+		apierror.BadRequest(w, "INVALID_CALLBACK_URL", "callback_url must be an http(s) URL on an allowed origin")
+		return
+	}
 	token, inv, err := h.Invites.Issue(r.Context(), actor, body.Email, body.Role, body.Payload)
 	if err != nil {
 		apierror.Forbidden(w, "INVITE_DENIED", err.Error())
 		return
 	}
-	inviteURL := strings.TrimRight(body.CallbackURL, "/")
 	if inviteURL == "" {
 		inviteURL = strings.TrimRight(h.Cfg.Pages.SignUpURL, "/")
 	}
@@ -58,9 +64,11 @@ func (h *InviteHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(inviteURL, "?") {
 			sep = "&"
 		}
-		inviteURL = inviteURL + sep + "token=" + token
+		inviteURL = inviteURL + sep + "token=" + url.QueryEscape(token)
 		if h.Email != nil {
-			_ = h.Email.SendInvitation(body.Email, inviteURL, body.Role)
+			if err := h.Email.SendInvitation(inv.Email, inviteURL, body.Role); err != nil {
+				log.Warn().Err(err).Str("invitation_id", inv.ID.String()).Msg("invitation email not sent")
+			}
 		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -103,7 +111,7 @@ func (h *InviteHandlers) Revoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InviteHandlers) Validate(w http.ResponseWriter, r *http.Request) {
-	inv, err := h.Invites.Validate(r.Context(), chi.URLParam(r, "token"))
+	inv, err := h.Invites.Validate(r.Context(), tokenParam(r))
 	if err != nil {
 		status := http.StatusBadRequest
 		code := "INVITE_INVALID"

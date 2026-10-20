@@ -73,7 +73,7 @@ func NewAuthService(
 		sessionCfg:          sessionCfg,
 		passwordPolicy:      passwordPolicy,
 		requireVerification: requireVerification,
-		resetTokenTTL:       5 * time.Minute,
+		resetTokenTTL:       PasswordResetTTL,
 	}
 }
 
@@ -450,7 +450,7 @@ func (s *AuthService) CreateEmailVerificationToken(ctx context.Context, userID u
 	if err != nil {
 		return "", err
 	}
-	if err := s.verifyRepo.Create(ctx, userID, security.HashToken(rawToken), time.Now().Add(24*time.Hour)); err != nil {
+	if err := s.verifyRepo.Create(ctx, userID, security.HashToken(rawToken), time.Now().Add(EmailVerificationTTL)); err != nil {
 		return "", err
 	}
 	return rawToken, nil
