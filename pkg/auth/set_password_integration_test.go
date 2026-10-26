@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -78,8 +79,22 @@ func TestSetPasswordAfterMagicLink(t *testing.T) {
 	}
 
 	// The new password signs in.
-	if rec := e.call(t, http.MethodPost, "/api/v1/auth/login", `{"email":"`+email+`","password":"another long passphrase"}`, nil); rec.Code != http.StatusOK {
-		t.Fatalf("login = %d %s", rec.Code, rec.Body.String())
+	login := e.call(t, http.MethodPost, "/api/v1/auth/login", `{"email":"`+email+`","password":"another long passphrase"}`, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	}
+	// Changing the password again signs out every other session (the login above) but keeps this one.
+	if rec := e.call(t, http.MethodPost, "/api/v1/auth/password", `{"current_password":"another long passphrase","new_password":"third long passphrase"}`, cookies); rec.Code != http.StatusNoContent {
+		t.Fatalf("second change = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := e.call(t, http.MethodGet, "/api/v1/account", "", login.Result().Cookies()); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("other session should be revoked, got %d", rec.Code)
+	}
+	if !hasPassword(t, e, cookies) {
+		t.Fatal("this session should still work")
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth_audit_logs a JOIN users_auth u ON u.id = a.user_id WHERE u.email = $1 AND a.action = 'password.change.failed'`, email); n != 2 {
+		t.Fatalf("expected two failed-attempt audit entries, got %d", n)
 	}
 
 	// With AllowPasswordAccounts, magic links keep working for the account.
@@ -106,5 +121,22 @@ func TestSetPasswordNeedsSessionAndCSRF(t *testing.T) {
 	e.h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("missing CSRF should be 403, got %d", rec.Code)
+	}
+}
+
+func TestSetPasswordNeedsRecentSessionForFirstPassword(t *testing.T) {
+	e := newMagicEnv(t)
+	email := strings.ToLower(uniqueEmail())
+	_, path := e.issue(t, email, e.org.Slug, "https://app.example.com/")
+	cookies := e.verify(path).Result().Cookies()
+	if _, err := e.conn.Exec(context.Background(), `UPDATE sessions SET created_at = now() - interval '2 hours' WHERE user_id = (SELECT id FROM users_auth WHERE email = $1)`, email); err != nil {
+		t.Fatal(err)
+	}
+	rec := e.call(t, http.MethodPost, "/api/v1/auth/password", `{"new_password":"correct horse battery"}`, cookies)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "REAUTH_REQUIRED") {
+		t.Fatalf("old session = %d %s", rec.Code, rec.Body.String())
+	}
+	if hasPassword(t, e, cookies) {
+		t.Fatal("no password should have been set")
 	}
 }

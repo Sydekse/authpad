@@ -66,6 +66,15 @@ func (r *SessionRepo) RevokeAllForUser(ctx context.Context, userID uuid.UUID) (i
 	return res.RowsAffected(), nil
 }
 
+// RevokeOthersForUser revokes every session of the user except keep.
+func (r *SessionRepo) RevokeOthersForUser(ctx context.Context, userID, keep uuid.UUID) (int64, error) {
+	res, err := r.db.Exec(ctx, `UPDATE sessions SET revoked = true WHERE user_id = $1 AND id <> $2 AND NOT revoked`, userID, keep)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected(), nil
+}
+
 // ListByUserID returns active sessions for a user.
 func (r *SessionRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]auth.Session, error) {
 	rows, err := r.db.Query(ctx, `

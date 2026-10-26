@@ -31,8 +31,6 @@ type UserInfoResponse struct {
 	Session      *SessionInfo   `json:"session,omitempty"`
 	Organization map[string]any `json:"organization,omitempty"`
 	OrgRole      string         `json:"org_role,omitempty"`
-	// HasPassword is false for accounts that only sign in by magic link or OAuth.
-	HasPassword bool `json:"has_password"`
 }
 
 type AccountResponse struct {
