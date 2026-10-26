@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `POST /auth/password` (session + CSRF, rate limited) sets a password for a signed-in, email-verified account that has none (magic-link or OAuth sign-ups) when the session is under 30 minutes old, or changes it when `current_password` matches. Every other session of the user is revoked; no email is sent. Errors: `WEAK_PASSWORD`, `INVALID_CURRENT_PASSWORD`, `REAUTH_REQUIRED`, `EMAIL_NOT_VERIFIED`, `ACCOUNT_INACTIVE`. Audited as `password.set`, `password.change` and `password.change.failed` (with a reason).
+- `GET /account` reports `has_password`.
 - Branded transactional emails. Invites, magic links, password reset and verification share one light, table-based layout with a coloured header band, optional logo, rounded button, plain-text alternative and dark-mode support. Configure with `EMAIL_HEADER_COLOR`, `EMAIL_BUTTON_COLOR`, `EMAIL_LOGO_URL`, `EMAIL_LOGO_WIDTH`, `EMAIL_FONT_FAMILY`, `EMAIL_HEADING_FONT_FAMILY`, `EMAIL_FOOTER_TEXT` and `EMAIL_ORG_INVITE_TITLE` / `_BODY` / `_BUTTON` (`Config.Email.Brand`). See docs/emails.md. The "Identity" label, "© Sydek" footer and role names ("as admin") are gone from emails.
 - Organization invites name the organization. New optional `OrgInvitationMailer` interface; existing `Mailer` implementations are unaffected.
 - Invite, reset and verification links percent-encode the token, and `GET /invitations/{token}/validate` and `GET /organizations/invitations/{token}/validate` accept a percent-encoded token. Before, a token whose `=` padding was sent as `%3D` never matched.

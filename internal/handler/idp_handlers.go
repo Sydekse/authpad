@@ -43,6 +43,8 @@ type AccountResponse struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	Organization map[string]any `json:"organization,omitempty"`
 	OrgRole      string         `json:"org_role,omitempty"`
+	// HasPassword is false for accounts that only sign in by magic link or OAuth.
+	HasPassword bool `json:"has_password"`
 }
 
 func (h *IdPHandlers) Userinfo(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +185,7 @@ func (h *IdPHandlers) GetAccount(w http.ResponseWriter, r *http.Request) {
 			resp.OrgRole = role
 		}
 	}
+	resp.HasPassword, _ = h.Auth.HasPassword(r.Context(), *userID)
 	writeJSON(w, http.StatusOK, resp)
 }
 

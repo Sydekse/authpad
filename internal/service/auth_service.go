@@ -26,6 +26,8 @@ var (
 	ErrWeakPassword         = errors.New("password does not meet policy")
 	ErrAccountLocked        = errors.New("account locked")
 	ErrAccountNotLocked     = errors.New("account is not locked")
+	ErrReauthRequired       = errors.New("recent sign-in required")
+	ErrAccountInactive      = errors.New("account is not active")
 )
 
 // StaffFunc reports whether a user should receive the shorter staff idle timeout.
@@ -373,6 +375,70 @@ func (s *AuthService) RevokeAllSessionsForUser(ctx context.Context, userID uuid.
 
 func (s *AuthService) ListSessions(ctx context.Context, userID uuid.UUID) ([]auth.Session, error) {
 	return s.sessionRepo.ListByUserID(ctx, userID)
+}
+
+// HasPassword reports whether the user has a password credential.
+func (s *AuthService) HasPassword(ctx context.Context, userID uuid.UUID) (bool, error) {
+	cred, err := s.credRepo.GetByUserID(ctx, userID)
+	return cred != nil, err
+}
+
+// PasswordSetMaxSessionAge is how fresh a session must be to add a first
+// password to an account that has none. A first password needs no current
+// password, so an old (possibly stolen) session must not be enough: the user
+// signs in again (magic link) and sets it right away.
+const PasswordSetMaxSessionAge = 30 * time.Minute
+
+// SetPassword sets or changes the password of the user behind sess. An account
+// that already has a password must present it (currentPassword). An account
+// without one (magic-link or OAuth sign-up) may set one only when its address is
+// verified and sess is recent (PasswordSetMaxSessionAge). On success every other
+// session of the user is revoked; sess stays signed in. No email is sent.
+// Returns created=true when a new credential was added.
+func (s *AuthService) SetPassword(ctx context.Context, sess *auth.Session, currentPassword, newPassword string) (created bool, err error) {
+	userID := sess.UserID
+	if err := s.ValidatePasswordPolicy(newPassword); err != nil {
+		return false, err
+	}
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || u == nil {
+		return false, ErrUserNotFound
+	}
+	if u.Status != "active" {
+		return false, ErrAccountInactive
+	}
+	cred, err := s.credRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if cred == nil {
+		if !u.EmailVerified {
+			return false, ErrEmailNotVerified
+		}
+		if time.Since(sess.CreatedAt) > PasswordSetMaxSessionAge {
+			return false, ErrReauthRequired
+		}
+		if err := s.CreateCredential(ctx, userID, newPassword); err != nil {
+			return false, err
+		}
+		created = true
+	} else {
+		ok, err := s.password.Verify(currentPassword, cred.PasswordHash)
+		if err != nil || !ok {
+			return false, ErrInvalidCredentials
+		}
+		hash, err := s.password.Hash(newPassword)
+		if err != nil {
+			return false, err
+		}
+		if err := s.credRepo.UpdateHash(ctx, cred.ID, hash, 2); err != nil {
+			return false, err
+		}
+	}
+	if _, err := s.sessionRepo.RevokeOthersForUser(ctx, userID, sess.ID); err != nil {
+		return created, err
+	}
+	return created, nil
 }
 
 func (s *AuthService) CreatePasswordResetToken(ctx context.Context, email string) (token string, err error) {
