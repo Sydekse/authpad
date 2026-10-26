@@ -307,6 +307,7 @@ func (s *Server) Mount(r chi.Router, basePath string) {
 		r.With(rateLimit).Get("/auth/oauth/{provider}/callback", s.oauth.OAuthCallback)
 		r.With(rateLimit, csrf).Post("/auth/password/reset-request", s.auth.PasswordResetRequest)
 		r.With(rateLimit, csrf).Post("/auth/password/reset", s.auth.PasswordReset)
+		r.With(rateLimit, csrf).Post("/auth/password", s.auth.SetPassword)
 
 		r.Get("/auth/mfa", s.mfa.ListFactors)
 		r.With(csrf).Post("/auth/mfa/enroll", s.mfa.EnrollTOTP)

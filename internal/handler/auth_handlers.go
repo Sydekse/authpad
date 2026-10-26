@@ -268,6 +268,47 @@ func (h *AuthHandlers) PasswordReset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type setPasswordBody struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// SetPassword lets a signed-in user set a password (accounts without one) or
+// change it (current_password required). 204 on success.
+func (h *AuthHandlers) SetPassword(w http.ResponseWriter, r *http.Request) {
+	userID, _, _, ok := requireSession(w, r, h.Auth, h.Cfg)
+	if !ok {
+		return
+	}
+	var req setPasswordBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierror.BadRequest(w, "INVALID_BODY", "Invalid request body")
+		return
+	}
+	created, err := h.Auth.SetPassword(r.Context(), *userID, req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrWeakPassword):
+			apierror.BadRequest(w, "WEAK_PASSWORD", err.Error())
+		case errors.Is(err, service.ErrInvalidCredentials):
+			apierror.BadRequest(w, "INVALID_CURRENT_PASSWORD", "Current password is not right")
+		case errors.Is(err, service.ErrEmailNotVerified):
+			apierror.Forbidden(w, "EMAIL_NOT_VERIFIED", "Email verification required")
+		default:
+			apierror.Internal(w, "SET_PASSWORD_FAILED", "Could not set password")
+		}
+		return
+	}
+	if h.Audit != nil {
+		action := "password.change"
+		if created {
+			action = "password.set"
+		}
+		h.Audit.LogAuth(r.Context(), userID, action, clientIP(r, h.Cfg), r.Header.Get("User-Agent"), nil)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AuthHandlers) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {

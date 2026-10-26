@@ -375,6 +375,50 @@ func (s *AuthService) ListSessions(ctx context.Context, userID uuid.UUID) ([]aut
 	return s.sessionRepo.ListByUserID(ctx, userID)
 }
 
+// HasPassword reports whether the user has a password credential.
+func (s *AuthService) HasPassword(ctx context.Context, userID uuid.UUID) (bool, error) {
+	cred, err := s.credRepo.GetByUserID(ctx, userID)
+	return cred != nil, err
+}
+
+// SetPassword sets or changes the password of a signed-in user. An account
+// that already has a password must present it (currentPassword). An account
+// without one (magic-link or OAuth sign-up) may set one only once its address
+// is verified, the same rule a password reset follows; the session itself is
+// the proof of inbox ownership, so no email is sent.
+// Returns created=true when a new credential was added.
+func (s *AuthService) SetPassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) (created bool, err error) {
+	if err := s.ValidatePasswordPolicy(newPassword); err != nil {
+		return false, err
+	}
+	u, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil || u == nil {
+		return false, ErrUserNotFound
+	}
+	if u.Status != "active" {
+		return false, ErrInvalidCredentials
+	}
+	cred, err := s.credRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if cred == nil {
+		if !u.EmailVerified {
+			return false, ErrEmailNotVerified
+		}
+		return true, s.CreateCredential(ctx, userID, newPassword)
+	}
+	ok, err := s.password.Verify(currentPassword, cred.PasswordHash)
+	if err != nil || !ok {
+		return false, ErrInvalidCredentials
+	}
+	hash, err := s.password.Hash(newPassword)
+	if err != nil {
+		return false, err
+	}
+	return false, s.credRepo.UpdateHash(ctx, cred.ID, hash, 2)
+}
+
 func (s *AuthService) CreatePasswordResetToken(ctx context.Context, email string) (token string, err error) {
 	u, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil || u == nil {
